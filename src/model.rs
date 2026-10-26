@@ -87,6 +87,10 @@ pub struct Entry {
     pub timestamp: String,
     /// Milliseconds since the epoch, 0 when unparseable.
     pub at: i64,
+    /// Byte offset of this entry's line in the session file. The parsed
+    /// session keeps counts, not text; this is how a request that does want
+    /// the text can seek straight to one line instead of rescanning 187 MB.
+    pub offset: u64,
     pub kind: Kind,
 }
 
@@ -128,6 +132,12 @@ impl Entry {
 /// transcript stays complete; a malformed line returns `None`.
 #[must_use]
 pub fn parse_entry(value: &Value) -> Option<Entry> {
+    parse_entry_at(value, 0)
+}
+
+/// Same as [`parse_entry`], recording where the line came from.
+#[must_use]
+pub fn parse_entry_at(value: &Value, offset: u64) -> Option<Entry> {
     let id = value.get("id")?.as_str()?.to_string();
     let parent = value
         .get("parentId")
@@ -145,6 +155,7 @@ pub fn parse_entry(value: &Value) -> Option<Entry> {
         parent,
         timestamp,
         at,
+        offset,
         kind,
     })
 }
@@ -232,6 +243,135 @@ fn classify(value: &Value) -> Kind {
     }
 }
 
+/// One block of readable text inside an entry, kept in the order the model
+/// sees it so a preview can label thinking separately from output.
+#[derive(Debug, Clone)]
+pub struct TextBlock {
+    /// `text`, `thinking`, `toolCall name`, `stdout`, `summary`, ...
+    pub role: String,
+    pub text: String,
+}
+
+/// Pull the model-facing text out of a raw JSONL line.
+///
+/// This is the read side of [`value_chars`]: that function counts characters,
+/// this one returns them. Only the fields the counter counts are emitted, so a
+/// preview can never show more text than the token estimate was based on.
+#[must_use]
+pub fn entry_blocks(value: &Value) -> Vec<TextBlock> {
+    let mut blocks = Vec::new();
+    match value.get("type").and_then(Value::as_str).unwrap_or("") {
+        "message" => {
+            let Some(message) = value.get("message") else {
+                return blocks;
+            };
+            if let Some(content) = message.get("content") {
+                blocks_of(content, &mut blocks);
+            }
+            // toolResult carries its output in `details`, not `content`, on
+            // some providers; take the big streams when present.
+            if let Some(details) = message.get("details") {
+                for key in ["stdout", "stderr"] {
+                    if let Some(text) = details.get(key).and_then(Value::as_str) {
+                        if !text.is_empty() {
+                            blocks.push(TextBlock { role: key.to_string(), text: text.to_string() });
+                        }
+                    }
+                }
+            }
+        }
+        "compaction" | "branch_summary" => {
+            if let Some(text) = value.get("summary").and_then(Value::as_str) {
+                blocks.push(TextBlock { role: "summary".to_string(), text: text.to_string() });
+            }
+        }
+        "custom_message" => {
+            if let Some(content) = value.get("content") {
+                blocks_of(content, &mut blocks);
+            }
+        }
+        other => {
+            for key in ["summary", "content", "text", "name"] {
+                if let Some(field) = value.get(key) {
+                    blocks_of(field, &mut blocks);
+                }
+            }
+            if blocks.is_empty() {
+                blocks.push(TextBlock { role: other.to_string(), text: String::new() });
+            }
+        }
+    }
+    blocks
+}
+
+fn blocks_of(value: &Value, out: &mut Vec<TextBlock>) {
+    match value {
+        Value::String(text) => {
+            if !text.is_empty() {
+                out.push(TextBlock { role: "text".to_string(), text: text.clone() });
+            }
+        }
+        Value::Array(items) => {
+            for item in items {
+                blocks_of(item, out);
+            }
+        }
+        Value::Object(map) => {
+            // A tool call's arguments are part of the prompt. Emit each
+            // argument value under `toolCall <name>.<param>` rather than the
+            // whole JSON blob: the blob's own characters are not what the token
+            // count measured, and `{"code":"\ndef ...` is unreadable where
+            // `code: def ...` is not.
+            if let Some(name) = map.get("name").and_then(Value::as_str) {
+                if let Some(args) = ["arguments", "input", "args"]
+                    .iter()
+                    .find_map(|key| map.get(*key))
+                {
+                    let before = out.len();
+                    match args {
+                        Value::Object(fields) => {
+                            for (param, value) in fields {
+                                let text = match value {
+                                    Value::String(text) => text.clone(),
+                                    other => other.to_string(),
+                                };
+                                if !text.is_empty() {
+                                    out.push(TextBlock {
+                                        role: format!("toolCall {name} · {param}"),
+                                        text,
+                                    });
+                                }
+                            }
+                        }
+                        other => {
+                            let text = other.to_string();
+                            if !text.is_empty() {
+                                out.push(TextBlock { role: format!("toolCall {name}"), text });
+                            }
+                        }
+                    }
+                    if out.len() > before {
+                        return;
+                    }
+                }
+            }
+            for (key, item) in map {
+                if !is_counted_field(key) {
+                    continue;
+                }
+                if let Some(text) = item.as_str() {
+                    if !text.is_empty() {
+                        out.push(TextBlock { role: key.clone(), text: text.to_string() });
+                    }
+                } else {
+                    blocks_of(item, out);
+                }
+            }
+        }
+        _ => {}
+    }
+}
+
 /// Fallback sizing for entry types this build does not model: count whatever
 /// string fields look like payload instead of reporting zero.
 fn summary_chars_of(value: &Value) -> Chars {
@@ -256,24 +396,38 @@ fn str_chars(value: Option<&Value>) -> Chars {
 }
 
 fn value_chars(value: &Value) -> Chars {
+    value_chars_filtered(value, false)
+}
+
+/// `everything` turns the key whitelist off for a subtree. A tool call's
+/// `arguments` is a JSON blob whose keys are the tool's own parameter names
+/// (`code`, `path`, `pattern`, ...), so applying the whitelist inside it counts
+/// nothing: the model still receives all of it.
+fn value_chars_filtered(value: &Value, everything: bool) -> Chars {
     let mut chars = Chars::default();
     match value {
         Value::String(text) => chars.add(text),
         Value::Array(items) => {
             for item in items {
-                chars.add_chars(value_chars(item));
+                chars.add_chars(value_chars_filtered(item, everything));
             }
         }
         Value::Object(map) => {
             for (key, item) in map {
-                if is_counted_field(key) {
-                    chars.add_chars(value_chars(item));
+                if everything || is_counted_field(key) {
+                    let payload = everything || is_payload_field(key);
+                    chars.add_chars(value_chars_filtered(item, payload));
                 }
             }
         }
         _ => {}
     }
     chars
+}
+
+/// Keys whose subtree is opaque tool input rather than a wrapper object.
+fn is_payload_field(key: &str) -> bool {
+    matches!(key, "arguments" | "args" | "input")
 }
 
 fn message_chars(message: &Value) -> Chars {

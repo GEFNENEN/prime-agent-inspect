@@ -109,6 +109,39 @@ fn serve(dir: &Path, port: u16, open: bool) -> Result<(), String> {
                 },
                 None => prime_agent_inspect::http::Response::text(400, "missing id"),
             },
+            "/api/slice" => {
+                let session_id = query_value(query, "id").unwrap_or_default();
+                let label = query_value(query, "label").unwrap_or_default();
+                let offset = query_value(query, "offset")
+                    .and_then(|value| value.parse::<usize>().ok())
+                    .unwrap_or(0);
+                let limit = query_value(query, "limit")
+                    .and_then(|value| value.parse::<usize>().ok())
+                    .unwrap_or(20)
+                    .min(200);
+                match resolve_session(&root, &session_id) {
+                    Some(path) => match cache.get(&path) {
+                        Ok(cached) => {
+                            let body = prime_agent_inspect::web::slice_text(
+                                &cached.session,
+                                &label,
+                                offset,
+                                limit,
+                                600,
+                            );
+                            match serde_json::to_string(&body) {
+                                Ok(body) => prime_agent_inspect::http::Response::json(body),
+                                Err(error) => prime_agent_inspect::http::Response::text(
+                                    500,
+                                    &format!("cannot serialize: {error}"),
+                                ),
+                            }
+                        }
+                        Err(error) => prime_agent_inspect::http::Response::text(500, &error),
+                    },
+                    None => prime_agent_inspect::http::Response::text(404, "no such session"),
+                }
+            }
             "/api/drop-cache" => {
                 cache.clear();
                 prime_agent_inspect::http::Response::json("{\"ok\":true}".to_string())
@@ -219,6 +252,30 @@ fn session_payload(
     // inside the file; imported or duplicated session files have both, and they
     // do not always agree. Resolve against the directory listing instead of
     // trusting the value as a path, so `../` cannot escape either way.
+    let path = resolve_session(root, id)
+        .ok_or_else(|| prime_agent_inspect::http::Response::text(404, "no such session"))?;
+    let cached = cache
+        .get(&path)
+        .map_err(|error| prime_agent_inspect::http::Response::text(500, &error))?;
+    if let Some(body) = cached.detail() {
+        return Ok(body);
+    }
+    match serde_json::to_string(&prime_agent_inspect::web::detail(&cached.session, None)) {
+        Ok(body) => {
+            cached.set_detail(&body);
+            Ok(body)
+        }
+        Err(error) => Err(prime_agent_inspect::http::Response::text(
+            500,
+            &format!("cannot serialize: {error}"),
+        )),
+    }
+}
+
+/// Map a URL id (file stem or header id) to a file inside the sessions
+/// directory. Resolving against the directory listing instead of trusting the
+/// value as a path keeps `../` from escaping either way.
+fn resolve_session(root: &Path, id: &str) -> Option<PathBuf> {
     let mut candidates: Vec<PathBuf> = Vec::new();
     if !id.is_empty()
         && id
@@ -249,27 +306,7 @@ fn session_payload(
             }
         }
     }
-    let path = candidates
-        .into_iter()
-        .find(|path| path.is_file())
-        .ok_or_else(|| prime_agent_inspect::http::Response::text(404, "no such session"))?;
-
-    let cached = cache
-        .get(&path)
-        .map_err(|error| prime_agent_inspect::http::Response::text(500, &error))?;
-    if let Some(body) = cached.detail() {
-        return Ok(body);
-    }
-    match serde_json::to_string(&prime_agent_inspect::web::detail(&cached.session, None)) {
-        Ok(body) => {
-            cached.set_detail(&body);
-            Ok(body)
-        }
-        Err(error) => Err(prime_agent_inspect::http::Response::text(
-            500,
-            &format!("cannot serialize: {error}"),
-        )),
-    }
+    candidates.into_iter().find(|path| path.is_file())
 }
 
 /// The `id` inside a session file's header line, read without parsing the rest.

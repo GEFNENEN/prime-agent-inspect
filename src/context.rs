@@ -33,6 +33,10 @@ pub struct Component {
     /// True when the token count is extrapolated from characters instead of
     /// measured from provider usage.
     pub estimated: bool,
+    /// Indices into `Session::entries` that this bucket holds. The UI needs
+    /// them to fetch the underlying text on demand: the parsed session keeps
+    /// character counts, never content.
+    pub members: Vec<usize>,
 }
 
 /// The prompt a compaction leaves behind, broken into labelled parts.
@@ -76,8 +80,13 @@ impl Assembly {
     }
 }
 
-fn push(components: &mut Vec<Component>, label: &str, chars: Chars, entries: u64) {
-    if chars.total() == 0 && entries == 0 {
+fn push(
+    components: &mut Vec<Component>,
+    label: &str,
+    chars: Chars,
+    members: Vec<usize>,
+) {
+    if chars.total() == 0 && members.is_empty() {
         return;
     }
     let (tokens, _) = estimate(chars);
@@ -85,8 +94,9 @@ fn push(components: &mut Vec<Component>, label: &str, chars: Chars, entries: u64
         label: label.to_string(),
         chars,
         tokens,
-        entries,
+        entries: members.len() as u64,
         estimated: true,
+        members,
     });
 }
 
@@ -208,19 +218,19 @@ fn assemble_at(session: &Session, path: &[usize], end: usize, marks: &Marks) -> 
 
     // Group by origin so the report answers "what is eating the prompt".
     let mut summary_chars = Chars::default();
-    let mut summary_entries = 0;
+    let mut summary_members: Vec<usize> = Vec::new();
     let mut digest_chars = Chars::default();
-    let mut digest_entries = 0;
+    let mut digest_members: Vec<usize> = Vec::new();
     let mut notice_chars = Chars::default();
-    let mut notice_entries = 0;
+    let mut notice_members: Vec<usize> = Vec::new();
     let mut user_chars = Chars::default();
-    let mut user_entries = 0;
+    let mut user_members: Vec<usize> = Vec::new();
     let mut assistant_chars = Chars::default();
-    let mut assistant_entries = 0;
+    let mut assistant_members: Vec<usize> = Vec::new();
     let mut tool_chars = Chars::default();
-    let mut tool_entries = 0;
+    let mut tool_members: Vec<usize> = Vec::new();
     let mut other_chars = Chars::default();
-    let mut other_entries = 0;
+    let mut other_members: Vec<usize> = Vec::new();
     // Per-tool totals for the retained toolResult rows.
     let mut per_tool: std::collections::HashMap<&str, (Chars, u64)> =
         std::collections::HashMap::new();
@@ -229,40 +239,35 @@ fn assemble_at(session: &Session, path: &[usize], end: usize, marks: &Marks) -> 
         let entry = &session.entries[index];
         let chars = entry.chars();
         match &entry.kind {
-            Kind::Compaction { .. } => {
+            Kind::Compaction { .. } | Kind::BranchSummary { .. } => {
                 summary_chars.cjk += chars.cjk;
                 summary_chars.other += chars.other;
-                summary_entries += 1;
-            }
-            Kind::BranchSummary { .. } => {
-                summary_chars.cjk += chars.cjk;
-                summary_chars.other += chars.other;
-                summary_entries += 1;
+                summary_members.push(index);
             }
             Kind::CustomMessage { custom_type, .. } if custom_type == HARNESS_DIGEST => {
                 digest_chars.cjk += chars.cjk;
                 digest_chars.other += chars.other;
-                digest_entries += 1;
+                digest_members.push(index);
             }
             Kind::CustomMessage { custom_type, .. } if custom_type == IPYTHON_STATE => {
                 notice_chars.cjk += chars.cjk;
                 notice_chars.other += chars.other;
-                notice_entries += 1;
+                notice_members.push(index);
             }
             Kind::User { .. } => {
                 user_chars.cjk += chars.cjk;
                 user_chars.other += chars.other;
-                user_entries += 1;
+                user_members.push(index);
             }
             Kind::Assistant { .. } => {
                 assistant_chars.cjk += chars.cjk;
                 assistant_chars.other += chars.other;
-                assistant_entries += 1;
+                assistant_members.push(index);
             }
             Kind::ToolResult { tool, .. } => {
                 tool_chars.cjk += chars.cjk;
                 tool_chars.other += chars.other;
-                tool_entries += 1;
+                tool_members.push(index);
                 let label = normalise_tool(tool);
                 let slot = per_tool.entry(label).or_insert((Chars::default(), 0));
                 slot.0.cjk += chars.cjk;
@@ -272,7 +277,7 @@ fn assemble_at(session: &Session, path: &[usize], end: usize, marks: &Marks) -> 
             _ => {
                 other_chars.cjk += chars.cjk;
                 other_chars.other += chars.other;
-                other_entries += 1;
+                other_members.push(index);
             }
         }
     }
@@ -313,13 +318,13 @@ fn assemble_at(session: &Session, path: &[usize], end: usize, marks: &Marks) -> 
         }
     }
 
-    push(&mut assembly.components, "摘要 summary", summary_chars, summary_entries);
-    push(&mut assembly.components, "摘要 harness_digest", digest_chars, digest_entries);
-    push(&mut assembly.components, "kernel ipython_state", notice_chars, notice_entries);
-    push(&mut assembly.components, "保留 user", user_chars, user_entries);
-    push(&mut assembly.components, "保留 assistant", assistant_chars, assistant_entries);
-    push(&mut assembly.components, "保留 toolResult", tool_chars, tool_entries);
-    push(&mut assembly.components, "保留 其他", other_chars, other_entries);
+    push(&mut assembly.components, "摘要 summary", summary_chars, summary_members);
+    push(&mut assembly.components, "摘要 harness_digest", digest_chars, digest_members);
+    push(&mut assembly.components, "kernel ipython_state", notice_chars, notice_members);
+    push(&mut assembly.components, "保留 user", user_chars, user_members);
+    push(&mut assembly.components, "保留 assistant", assistant_chars, assistant_members);
+    push(&mut assembly.components, "保留 toolResult", tool_chars, tool_members);
+    push(&mut assembly.components, "保留 其他", other_chars, other_members);
 
     assembly
         .components

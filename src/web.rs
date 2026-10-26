@@ -8,7 +8,7 @@ use serde_json::{json, Value};
 
 use crate::calibrate::{calibrate, summarize};
 use crate::context::{assemble, compaction_timeline};
-use crate::model::Kind;
+use crate::model::{entry_blocks, Kind};
 use crate::overhead::overhead;
 use crate::session::Session;
 
@@ -96,6 +96,14 @@ pub fn detail(session: &Session, leaf_id: Option<&str>) -> Value {
                 "share": share,
                 "entries": component.entries,
                 "estimated": component.estimated,
+                // Entry ids let the browser ask for the underlying text of
+                // exactly this bucket. They are not in this payload: a 225-
+                // compaction session would carry megabytes of duplicates.
+                "members": component
+                    .members
+                    .iter()
+                    .map(|&index| session.entries[index].id.as_str())
+                    .collect::<Vec<_>>(),
             })
         })
         .collect();
@@ -263,4 +271,209 @@ pub fn transcript(session: &Session, leaf: &str, offset: usize, limit: usize) ->
         })
         .collect();
     json!({ "total": total, "offset": start, "limit": limit, "rows": rows })
+}
+
+/// The text behind one component bucket, one page at a time.
+///
+/// The detail payload names the entries in each slice but never carries their
+/// content: a 225-compaction session would ship megabytes of duplicates just to
+/// let a tooltip say "python_repl, 54k tokens". This endpoint is the other half
+/// — the browser asks for one bucket, one page, on demand.
+///
+/// Each row is truncated to `preview_chars`. The point is to see what the
+/// tokens are, not to read the session in the browser.
+#[must_use]
+pub fn slice_text(
+    session: &Session,
+    label: &str,
+    offset: usize,
+    limit: usize,
+    preview_chars: usize,
+) -> Value {
+    let leaf = session.default_leaf().unwrap_or_default();
+    let assembly = assemble(session, leaf);
+    let Some(component) = assembly
+        .components
+        .iter()
+        .find(|component| component.label == label)
+    else {
+        return json!({ "error": format!("no component named {label:?}"), "rows": [] });
+    };
+
+    let total = component.members.len();
+    let start = offset.min(total);
+    let end = start.saturating_add(limit).min(total);
+    let mut rows = Vec::with_capacity(end - start);
+    let mut truncated = 0_u64;
+
+    for &index in &component.members[start..end] {
+        let entry = &session.entries[index];
+        let raw = crate::session::raw_line_at(&session.path, entry.offset);
+        let (blocks, note) = match raw {
+            Ok(value) => (entry_blocks(&value), None),
+            Err(error) => (Vec::new(), Some(error)),
+        };
+        // Each block gets its own budget. A shared budget let one long
+        // `thinking` block swallow it and drop the tool call after it, which
+        // reads as "this entry has no arguments" — the opposite of the point.
+        let mut kept = Vec::new();
+        for block in &blocks {
+            let chars: Vec<char> = block.text.chars().collect();
+            let take = chars.len().min(preview_chars);
+            let text: String = chars[..take].iter().collect();
+            if take < chars.len() {
+                truncated += 1;
+            }
+            kept.push(json!({
+                "role": block.role,
+                "text": text,
+                "chars": chars.len(),
+                "shown": take,
+            }));
+        }
+        let (tokens, _) = crate::token_est::estimate(entry.chars());
+        // `chars` is what the analyzer counted for this entry (the number the
+        // donut used); `textChars` is what the blocks below actually contain.
+        // They differ for tool calls because the counted text is the argument
+        // *values* while the preview shows the JSON that carries them. Report
+        // both rather than letting a reader find the mismatch and guess.
+        let text_chars: u64 = kept
+            .iter()
+            .filter_map(|block| block.get("chars").and_then(Value::as_u64))
+            .sum();
+        rows.push(json!({
+            "id": entry.id,
+            "at": entry.at,
+            "timestamp": entry.timestamp,
+            "kind": entry.kind_name(),
+            "chars": entry.chars().total(),
+            "textChars": text_chars,
+            "tokens": tokens,
+            "blocks": kept,
+            "error": note,
+        }));
+    }
+
+    json!({
+        "label": component.label,
+        "total": total,
+        "offset": start,
+        "limit": limit,
+        "truncated": truncated,
+        "previewChars": preview_chars,
+        "rows": rows,
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Write;
+    use std::path::{Path, PathBuf};
+
+    struct TempDir(PathBuf);
+    impl TempDir {
+        fn new() -> Self {
+            static COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+            let unique = COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            let path = std::env::temp_dir().join(format!(
+                "prime-agent-inspect-web-{}-{unique}",
+                std::process::id()
+            ));
+            std::fs::create_dir_all(&path).expect("mkdir");
+            Self(path)
+        }
+        fn path(&self) -> &Path {
+            &self.0
+        }
+    }
+    impl Drop for TempDir {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    fn write_session(lines: &[&str]) -> (TempDir, PathBuf) {
+        let dir = TempDir::new();
+        let path = dir.path().join("s.jsonl");
+        let mut file = std::fs::File::create(&path).expect("create");
+        for line in lines {
+            writeln!(file, "{line}").expect("write");
+        }
+        (dir, path)
+    }
+
+    /// A component must name the entries it holds, and the names must resolve
+    /// to exactly the entries the assembler kept.
+    #[test]
+    fn components_list_the_entries_they_hold() {
+        let (_dir, path) = write_session(&[
+            r#"{"type":"session","id":"s1","timestamp":"2026-01-01T00:00:00.000Z","cwd":"/tmp"}"#,
+            r#"{"type":"message","id":"u1","parentId":null,"timestamp":"2026-01-01T00:00:01.000Z","message":{"role":"user","content":"hello there"}}"#,
+            r#"{"type":"message","id":"a1","parentId":"u1","timestamp":"2026-01-01T00:00:02.000Z","message":{"role":"assistant","content":[{"type":"text","text":"general kenobi"}]}}"#,
+        ]);
+        let session = crate::session::load(&path).expect("loads");
+        let assembly = assemble(&session, "a1");
+        let user = assembly
+            .components
+            .iter()
+            .find(|component| component.label == "保留 user")
+            .expect("user component");
+        assert_eq!(user.members.len(), 1);
+        assert_eq!(session.entries[user.members[0]].id, "u1");
+        assert_eq!(user.entries, 1, "the count must match the member list");
+    }
+
+    /// The preview endpoint is the read side of the counter: it must return the
+    /// text the count was based on, truncated per block.
+    #[test]
+    fn slice_text_returns_the_underlying_text() {
+        let (_dir, path) = write_session(&[
+            r#"{"type":"session","id":"s1","timestamp":"2026-01-01T00:00:00.000Z","cwd":"/tmp"}"#,
+            r#"{"type":"message","id":"u1","parentId":null,"timestamp":"2026-01-01T00:00:01.000Z","message":{"role":"user","content":"hello there"}}"#,
+        ]);
+        let session = crate::session::load(&path).expect("loads");
+        let payload = slice_text(&session, "保留 user", 0, 10, 600);
+        assert_eq!(payload["total"], 1);
+        let row = &payload["rows"][0];
+        assert_eq!(row["id"], "u1");
+        assert_eq!(row["blocks"][0]["text"], "hello there");
+        assert_eq!(row["blocks"][0]["chars"], 11);
+    }
+
+    /// A block longer than the budget is cut, and the row says so.
+    #[test]
+    fn long_blocks_are_truncated_per_block() {
+        let long = "x".repeat(50);
+        let assistant = format!(
+            r#"{{"type":"message","id":"a1","parentId":null,"timestamp":"2026-01-01T00:00:02.000Z","message":{{"role":"assistant","content":[{{"type":"thinking","thinking":"{long}"}},{{"type":"text","text":"{long}"}}]}}}}"#
+        );
+        let (_dir, path) = write_session(&[
+            r#"{"type":"session","id":"s1","timestamp":"2026-01-01T00:00:00.000Z","cwd":"/tmp"}"#,
+            &assistant,
+        ]);
+        let session = crate::session::load(&path).expect("loads");
+        let payload = slice_text(&session, "保留 assistant", 0, 10, 10);
+        let blocks = payload["rows"][0]["blocks"].as_array().expect("blocks");
+        assert_eq!(blocks.len(), 2, "no block may be dropped by the budget");
+        for block in blocks {
+            assert_eq!(block["chars"], 50);
+            assert_eq!(block["shown"], 10);
+            assert_eq!(block["text"].as_str().unwrap().chars().count(), 10);
+        }
+        assert_eq!(payload["truncated"], 2);
+    }
+
+    /// An unknown label is a normal answer, not a panic.
+    #[test]
+    fn unknown_labels_report_an_error_field() {
+        let (_dir, path) = write_session(&[
+            r#"{"type":"session","id":"s1","timestamp":"2026-01-01T00:00:00.000Z","cwd":"/tmp"}"#,
+            r#"{"type":"message","id":"u1","parentId":null,"timestamp":"2026-01-01T00:00:01.000Z","message":{"role":"user","content":"hi"}}"#,
+        ]);
+        let session = crate::session::load(&path).expect("loads");
+        let payload = slice_text(&session, "no such bucket", 0, 10, 600);
+        assert!(payload["error"].as_str().is_some());
+        assert_eq!(payload["rows"].as_array().map(Vec::len), Some(0));
+    }
 }

@@ -13,7 +13,7 @@ use std::path::{Path, PathBuf};
 
 use serde_json::Value;
 
-use crate::model::{parse_entry, Entry, Kind};
+use crate::model::{parse_entry_at, Entry, Kind};
 
 /// A session file that failed to load, and why.
 #[derive(Debug)]
@@ -131,6 +131,42 @@ impl Session {
     }
 }
 
+/// The raw JSONL line for one entry, read by seeking to its recorded offset.
+///
+/// The parsed session deliberately keeps counts rather than text; a preview
+/// that wants to show a bucket's contents would otherwise have to re-parse the
+/// whole file (187 MB on the largest session). One `seek` to a known offset is
+/// O(line length).
+///
+/// # Errors
+///
+/// Returns a message when the file shrank or the offset no longer holds JSON.
+pub fn raw_line_at(path: &Path, offset: u64) -> Result<Value, String> {
+    use std::io::{Read, Seek, SeekFrom};
+    let mut file = File::open(path).map_err(|error| format!("{}: {error}", path.display()))?;
+    file.seek(SeekFrom::Start(offset))
+        .map_err(|error| format!("seek {offset}: {error}"))?;
+    // Read in chunks until the newline: a line can be 400 KB, and the maximum
+    // is not worth guessing.
+    let mut line = Vec::new();
+    let mut chunk = [0_u8; 64 * 1024];
+    loop {
+        let read = file
+            .read(&mut chunk)
+            .map_err(|error| format!("read {offset}: {error}"))?;
+        if read == 0 {
+            break;
+        }
+        if let Some(newline) = chunk[..read].iter().position(|&byte| byte == b'\n') {
+            line.extend_from_slice(&chunk[..newline]);
+            break;
+        }
+        line.extend_from_slice(&chunk[..read]);
+    }
+    let text = String::from_utf8_lossy(&line);
+    serde_json::from_str(text.trim()).map_err(|error| format!("line at {offset}: {error}"))
+}
+
 /// Read a session file. A line that fails to parse is counted and skipped
 /// rather than failing the load: an analyzer is more useful when it can still
 /// show a partially damaged session.
@@ -150,12 +186,24 @@ pub fn load(path: &Path) -> Result<Session, LoadError> {
     let mut entries: Vec<Entry> = Vec::new();
     let mut children: HashMap<String, u64> = HashMap::new();
     let mut skipped_lines = 0_u64;
+    // Byte offset of the next line, so each entry can point back at its own
+    // line. `read_until` (not `lines`) because the offset must count the
+    // newline bytes.
+    let mut offset = 0_u64;
+    let mut line = String::new();
+    let mut reader = reader;
 
-    for line in reader.lines() {
-        let Ok(line) = line else {
+    loop {
+        line.clear();
+        let start = offset;
+        let Ok(read) = reader.read_line(&mut line) else {
             skipped_lines += 1;
-            continue;
+            break;
         };
+        if read == 0 {
+            break;
+        }
+        offset += read as u64;
         let trimmed = line.trim();
         if trimmed.is_empty() {
             continue;
@@ -168,7 +216,7 @@ pub fn load(path: &Path) -> Result<Session, LoadError> {
             header = parse_header(&value);
             continue;
         }
-        let Some(entry) = parse_entry(&value) else {
+        let Some(entry) = parse_entry_at(&value, start) else {
             skipped_lines += 1;
             continue;
         };
@@ -342,5 +390,40 @@ mod tests {
         assert_eq!(name, "ipython_state");
         assert_eq!(*count, 2);
         assert_eq!(*chars, 8);
+    }
+
+    /// The parser keeps counts, so a preview needs a way back to the text.
+    /// Every entry must point at the exact byte where its line starts.
+    #[test]
+    fn entries_remember_the_offset_of_their_own_line() {
+        let (_dir, path) = write_session(&[
+            r#"{"type":"session","id":"s1","timestamp":"2026-01-01T00:00:00.000Z","cwd":"/tmp"}"#,
+            r#"{"type":"message","id":"u1","parentId":null,"timestamp":"2026-01-01T00:00:01.000Z","message":{"role":"user","content":"first"}}"#,
+            r#"{"type":"message","id":"a1","parentId":"u1","timestamp":"2026-01-01T00:00:02.000Z","message":{"role":"assistant","content":[{"type":"text","text":"second"}]}}"#,
+        ]);
+        let session = load(&path).expect("loads");
+        assert_eq!(session.entries.len(), 2);
+        for entry in &session.entries {
+            let value = raw_line_at(&path, entry.offset).expect("line readable");
+            assert_eq!(
+                value.get("id").and_then(Value::as_str),
+                Some(entry.id.as_str()),
+                "offset {} does not point at entry {}",
+                entry.offset,
+                entry.id
+            );
+        }
+        // The header line is not an entry, so the first entry starts past it.
+        assert!(session.entries[0].offset > 0);
+    }
+
+    /// Reading past the end must be an error, not an empty entry.
+    #[test]
+    fn reading_past_the_end_reports_an_error() {
+        let (_dir, path) = write_session(&[
+            r#"{"type":"session","id":"s1","timestamp":"2026-01-01T00:00:00.000Z","cwd":"/tmp"}"#,
+        ]);
+        let bytes = std::fs::metadata(&path).expect("stat").len();
+        assert!(raw_line_at(&path, bytes).is_err());
     }
 }
