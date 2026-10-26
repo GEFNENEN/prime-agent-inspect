@@ -78,6 +78,37 @@ canvas{width:100%;height:auto;display:block}
    whole tail is reachable without a click per ten rows. */
 .tablewrap{max-height:360px;overflow:auto}
 .tablewrap th{position:sticky;top:0;background:var(--panel);z-index:1}
+/* Composition: donut on the left, legend on the right. The legend rows are
+   hover targets too — a 0.5% slice is two pixels wide and impossible to hit. */
+.pie{display:flex;gap:22px;align-items:center;flex-wrap:wrap;margin-top:14px}
+.pie svg{width:200px;height:200px;flex:0 0 auto}
+.pie .slice{stroke:var(--panel);stroke-width:1.5;cursor:default;
+  transition:opacity .12s,transform .12s;transform-origin:100px 100px}
+.pie .slice:hover,.pie .slice.on{opacity:.78;transform:scale(1.018)}
+.pie .hole{fill:var(--panel)}
+.pie .ctr{fill:var(--fg);font-weight:600;font-variant-numeric:tabular-nums}
+.pie .ctr-sub{fill:var(--dim)}
+.pie .side{flex:0 1 560px;min-width:240px}
+.pie .side .legend{flex-direction:column;gap:2px;margin-top:0}
+.pie .side .legend>span{display:flex;align-items:baseline;gap:8px;padding:3px 6px;
+  border-radius:5px;cursor:default}
+.pie .side .legend>span:hover,.pie .side .legend>span.on{background:var(--panel2)}
+.pie .side .legend .lbl{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.pie .side .legend b{font-variant-numeric:tabular-nums}
+.pie .side .legend .sh{width:52px;text-align:right;color:var(--dim);
+  font-variant-numeric:tabular-nums}
+.pie .side .legend .en{width:64px;text-align:right;color:var(--dim);
+  font-variant-numeric:tabular-nums;font-size:11px}
+.pietip{position:fixed;z-index:60;display:none;pointer-events:none;
+  background:var(--panel2);border:1px solid var(--accent);border-radius:8px;
+  padding:8px 10px;font-size:12px;line-height:1.55;min-width:190px;
+  box-shadow:0 8px 28px rgba(0,0,0,.5)}
+.pietip .h{display:flex;align-items:center;gap:6px;font-weight:600;margin-bottom:5px}
+.pietip .h i{width:9px;height:9px;border-radius:2px;flex:0 0 auto}
+.pietip .r{display:flex;justify-content:space-between;gap:16px;color:var(--dim)}
+.pietip .r b{color:var(--fg);font-weight:600;font-variant-numeric:tabular-nums}
+.pietip .n{margin-top:5px;padding-top:5px;border-top:1px solid var(--line);
+  color:var(--dim);font-size:11px;max-width:240px}
 </style>
 </head>
 <body>
@@ -199,6 +230,7 @@ async function openSession(id, keepScroll) {
 }
 
 function renderDetail(d) {
+  hidePieTip();
   if (d.error) { $("detail").innerHTML = '<p class="muted">' + esc(d.error) + "</p>"; return; }
   const parts = [];
 
@@ -227,19 +259,11 @@ function renderDetail(d) {
       <div class="v" style="font-size:13px">${when(d.firstAt)} → ${when(d.lastAt)}</div></div>
   </div><div class="legend">${acc} ${fixed}</div></div>`);
 
-  // Composition
-  const total = d.prompt.contentTokens || 1;
-  const bar = d.prompt.components.map((c, i) =>
-    `<span style="width:${(c.tokens/total*100).toFixed(2)}%;background:${PALETTE[i%PALETTE.length]}"
-      title="${esc(c.label)} ${num(c.tokens)}"></span>`).join("");
-  const legend = d.prompt.components.map((c, i) =>
-    `<span><i style="background:${PALETTE[i%PALETTE.length]}"></i>${esc(c.label)}
-      <b>${num(c.tokens)}</b> <span class="muted">${pct(c.share)}</span></span>`).join("");
-  parts.push(`<div class="card"><h2>上下文组成 <span class="muted" style="text-transform:none;letter-spacing:0">下一轮会发出去的内容</span></h2>
-    <div class="bar">${bar}</div>
-    <div class="legend">${legend}</div>
-    <p class="hint">保留 ${num(d.prompt.keptEntries)} 条，丢弃 ${num(d.prompt.droppedEntries)} 条（切点之前的历史）。</p>
-  </div>`);
+  // Composition. A donut over the *whole* prompt: content components plus the
+  // fixed overhead. The old stacked bar only covered content, so the ~11% you
+  // pay for the system prompt and tool definitions had no slice at all.
+  const compItems = compositionItems(d);
+  parts.push(compositionCard(d, compItems));
 
   // Retained rows split by tool: the composition above says toolResult is N%,
   // this says which tool produced it. Same 250 rows, finer granularity.
@@ -319,6 +343,7 @@ function renderDetail(d) {
   </div>`);
 
   $("detail").innerHTML = parts.join("");
+  setupComposition(d, compItems);
   setupTimeline(d.timeline);
 }
 
@@ -398,6 +423,223 @@ function renderTimelineRows(timeline) {
         </tr>`;
       }).join("")
     : '<tr><td colspan="7" class="muted">无压缩</td></tr>';
+}
+
+// ---------------------------------------------------------------- composition
+
+/// Slices of the donut: every prompt component plus the fixed overhead, so the
+/// shares add up to the number the provider actually bills. The backend's
+/// `share` is relative to content only, which is exactly the confusion this
+/// chart is meant to remove, so shares are recomputed here.
+const FIXED_SLICE = "#5c5670";
+
+function compositionItems(d) {
+  const items = d.prompt.components.map((c, i) => ({
+    label: c.label,
+    tokens: c.tokens,
+    chars: c.chars,
+    cjk: c.cjk,
+    entries: c.entries,
+    estimated: c.estimated,
+    color: PALETTE[i % PALETTE.length],
+    fixed: false,
+  }));
+  const fixed = d.fixed || { tokens: 0 };
+  if (fixed.tokens > 0) {
+    items.push({
+      label: "固定开销",
+      tokens: fixed.tokens,
+      chars: null,
+      cjk: null,
+      entries: null,
+      estimated: !fixed.measured,
+      color: FIXED_SLICE,
+      fixed: true,
+      measured: fixed.measured,
+      samples: fixed.samples,
+    });
+  }
+  const total = items.reduce((sum, it) => sum + it.tokens, 0);
+  for (const it of items) it.share = total ? it.tokens / total : 0;
+  return items;
+}
+
+function compositionCard(d, items) {
+  const total = items.reduce((sum, it) => sum + it.tokens, 0);
+  const legend = items.map((it, i) => `<span data-slice="${i}">
+      <i style="background:${it.color}"></i>
+      <span class="lbl">${esc(it.label)}</span>
+      <b>${num(it.tokens)}</b>
+      <span class="sh">${pct(it.share)}</span>
+      <span class="en">${it.entries == null ? "" : num(it.entries) + " 条"}</span>
+    </span>`).join("");
+  // The thin stacked bar stays: at a glance it gives the linear proportions the
+  // donut is bad at, and it costs 8 pixels. Same items, same colours, so the two
+  // views can never disagree.
+  // Widths come from cumulative shares so rounding cannot leave a 1px seam at
+  // the right edge; the last slice is told to take up whatever is left.
+  let acc = 0;
+  const bar = items.map((it, i) => {
+    const from = acc;
+    acc += it.share * 100;
+    const width = i === items.length - 1 ? 100 - from : acc - from;
+    return `<span style="width:${width.toFixed(3)}%;background:${it.color}"></span>`;
+  }).join("");
+  return `<div class="card"><h2>上下文组成
+      <span class="muted" style="text-transform:none;letter-spacing:0">下一轮会发出去的全部内容，含固定开销</span></h2>
+    <div class="bar">${bar}</div>
+    <div class="pie" id="pie">
+      <svg viewBox="0 0 200 200" role="img" aria-label="prompt 组成饼图">
+        ${donutPaths(items)}
+        <circle class="hole" cx="100" cy="100" r="56"></circle>
+        <text class="ctr" x="100" y="97" text-anchor="middle" font-size="17">${num(total)}</text>
+        <text class="ctr-sub" x="100" y="113" text-anchor="middle" font-size="10">tokens</text>
+      </svg>
+      <div class="side"><div class="legend">${legend}</div></div>
+    </div>
+    <p class="hint">正文 ${num(d.prompt.contentTokens)} + 固定开销 ${num((d.fixed || {}).tokens)}
+       = ${num(total)}。保留 ${num(d.prompt.keptEntries)} 条，丢弃 ${num(d.prompt.droppedEntries)} 条（切点之前的历史）。
+      悬停看每块的字符数、条目数与占比。</p>
+  </div>`;
+}
+
+/// One annular sector per slice. Angles start at 12 o'clock and go clockwise,
+/// which matches how the legend reads.
+function donutPaths(items) {
+  const cx = 100, cy = 100, rOut = 92, rIn = 56;
+  const point = (a, r) => [cx + r * Math.sin(a), cy - r * Math.cos(a)];
+  const total = items.reduce((sum, it) => sum + it.tokens, 0) || 1;
+  // Hairline gaps keep neighbouring slices legible; skipped when a slice is so
+  // thin that removing 0.9° would erase it.
+  const GAP = 0.9 * Math.PI / 180;
+  let angle = 0;
+  return items.map((it, i) => {
+    if (it.tokens <= 0) return "";
+    const sweep = (it.tokens / total) * Math.PI * 2;
+    const gap = sweep > GAP * 2.5 ? GAP : 0;
+    const a0 = angle + gap;
+    const a1 = angle + sweep - gap;
+    angle += sweep;
+    const large = a1 - a0 > Math.PI ? 1 : 0;
+    const [x0, y0] = point(a0, rOut);
+    const [x1, y1] = point(a1, rOut);
+    const [x2, y2] = point(a1, rIn);
+    const [x3, y3] = point(a0, rIn);
+    const dPath = `M ${x0.toFixed(2)} ${y0.toFixed(2)}
+      A ${rOut} ${rOut} 0 ${large} 1 ${x1.toFixed(2)} ${y1.toFixed(2)}
+      L ${x2.toFixed(2)} ${y2.toFixed(2)}
+      A ${rIn} ${rIn} 0 ${large} 0 ${x3.toFixed(2)} ${y3.toFixed(2)} Z`;
+    return `<path class="slice" data-slice="${i}" d="${dPath}" fill="${it.color}"
+      fill-rule="evenodd"></path>`;
+  }).join("");
+}
+
+let pieTip = null;
+function hidePieTip() {
+  if (pieTip) pieTip.style.display = "none";
+  for (const el of document.querySelectorAll(".pie .on")) el.classList.remove("on");
+}
+
+/// The tooltip is fixed to the viewport, so it must not outlive the card: one
+/// capture-phase dismiss listener, registered once.
+function pieDismissOnScroll() {
+  if (pieDismissOnScroll.done) return;
+  pieDismissOnScroll.done = true;
+  document.addEventListener("scroll", hidePieTip, true);
+  document.addEventListener("keydown", (e) => { if (e.key === "Escape") hidePieTip(); });
+}
+
+function pieTooltip() {
+  if (!pieTip) {
+    pieTip = document.createElement("div");
+    pieTip.className = "pietip";
+    document.body.appendChild(pieTip);
+  }
+  return pieTip;
+}
+
+/// Detail for one slice. This is the part the stacked bar could not show: it
+/// had a one-line `title` and no room for characters, share of the full prompt
+/// or what is inside a toolResult bucket.
+function pieTipHTML(d, item) {
+  const rows = [];
+  const push = (k, v) => rows.push(`<div class="r"><span>${k}</span><b>${v}</b></div>`);
+  push("tokens", num(item.tokens));
+  push("占整个 prompt", pct(item.share));
+  if (!item.fixed && d.prompt.contentTokens) {
+    push("占正文", pct(item.tokens / d.prompt.contentTokens));
+  }
+  if (item.chars != null) push("字符", num(item.chars));
+  if (item.cjk != null) push("其中 CJK 字符", num(item.cjk));
+  if (item.entries != null) push("条目", num(item.entries));
+
+  let note = "";
+  if (item.fixed) {
+    note = item.measured
+      ? `系统提示 + 工具定义，从 ${num(item.samples)} 个压缩点反推。会话文件里没有这部分。`
+      : "系统提示 + 工具定义，是假设值：这个会话没有可用的实测点。";
+  } else if (/toolResult/.test(item.label) && d.prompt.tools && d.prompt.tools.length) {
+    const top = d.prompt.tools.slice(0, 4).map((t) =>
+      `${esc(t.tool)} ${num(t.tokens)}`).join(" · ");
+    const more = d.prompt.tools.length > 4 ? ` 等 ${d.prompt.tools.length} 种` : "";
+    note = `按工具拆分：${top}${more}`;
+  } else if (item.estimated) {
+    note = "估算值：按 CJK 感知的字符/token 系数换算。";
+  }
+  return `<div class="h"><i style="background:${item.color}"></i>${esc(item.label)}</div>
+    ${rows.join("")}${note ? `<div class="n">${note}</div>` : ""}`;
+}
+
+function setupComposition(d, items) {
+  const card = $("pie");
+  if (!card || !items.length) return;
+  const tip = pieTooltip();
+  pieDismissOnScroll();
+  const slices = Array.from(card.querySelectorAll(".slice"));
+  const legends = Array.from(card.querySelectorAll(".legend>span"));
+  const pairs = [slices, legends];
+
+  const highlight = (index, on) => {
+    for (const group of pairs) {
+      for (const el of group) {
+        const match = Number(el.dataset.slice) === index;
+        el.classList.toggle("on", on && match);
+      }
+    }
+  };
+
+  const show = (index, event) => {
+    const item = items[index];
+    if (!item) return;
+    tip.innerHTML = pieTipHTML(d, item);
+    tip.style.display = "block";
+    move(event);
+    highlight(index, true);
+  };
+  const move = (event) => {
+    if (!event) return;
+    const pad = 14;
+    const box = tip.getBoundingClientRect();
+    let x = event.clientX + pad;
+    let y = event.clientY + pad;
+    if (x + box.width > window.innerWidth - 8) x = event.clientX - box.width - pad;
+    if (y + box.height > window.innerHeight - 8) y = event.clientY - box.height - pad;
+    tip.style.left = Math.max(8, x) + "px";
+    tip.style.top = Math.max(8, y) + "px";
+  };
+  const hide = (index) => {
+    tip.style.display = "none";
+    highlight(index, false);
+  };
+
+  for (const group of pairs) {
+    for (const el of group) {
+      const index = Number(el.dataset.slice);
+      el.addEventListener("mouseenter", (e) => show(index, e));
+      el.addEventListener("mousemove", move);
+      el.addEventListener("mouseleave", () => hide(index));
+    }
+  }
 }
 
 function drawChart(timeline) {
