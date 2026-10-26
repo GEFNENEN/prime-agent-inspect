@@ -44,6 +44,11 @@ pub fn list_row(session: &Session) -> Value {
         "fixedMeasured": fixed.map(|value| value.measured),
         "firstAt": session.first_at(),
         "lastAt": session.last_at(),
+        "turns": if leaf.is_empty() {
+            0
+        } else {
+            turn_count(session, leaf)
+        },
         "skippedLines": session.skipped_lines,
     })
 }
@@ -219,6 +224,10 @@ pub fn detail(session: &Session, leaf_id: Option<&str>) -> Value {
         "cache": cache_stats(session, &leaf),
         "tools": tool_stats(session, &leaf),
         "harness": harness_stats(session, &leaf),
+        "refinements": refinement_log(session, &leaf),
+        "commits": commit_log(session, &leaf),
+        "turns": turn_count(session, &leaf),
+        "callsPerTurn": calls_per_turn(session, &leaf),
         "daily": daily_activity(session, &leaf),
         "accuracy": accuracy,
         "notices": notices,
@@ -425,10 +434,6 @@ fn tool_stats(session: &Session, leaf: &str) -> Vec<Value> {
 /// child ever appears under two origins.
 fn harness_stats(session: &Session, leaf: &str) -> Value {
     let mut custom: std::collections::HashMap<String, u64> = std::collections::HashMap::new();
-    let mut git: Vec<Value> = Vec::new();
-    // The refinement records are the only place the file says *why* the
-    // harness changed; `label` carries the summary the agent wrote for it.
-    let mut refinements: Vec<Value> = Vec::new();
     // target id -> running (prompt, output). Rows arrive in file order, so the
     // last write for a target is its final total.
     let mut children: std::collections::HashMap<&str, (u64, u64)> = std::collections::HashMap::new();
@@ -436,21 +441,9 @@ fn harness_stats(session: &Session, leaf: &str) -> Value {
     for index in session.branch(leaf) {
         let entry = &session.entries[index];
         match &entry.kind {
-            Kind::Custom {
-                custom_type,
-                label,
-                ..
-            } => {
+            Kind::Custom { custom_type, .. } => {
                 *custom.entry(custom_type.clone()).or_insert(0) += 1;
-                if custom_type == "prime-agent.refinement" && !label.is_empty() {
-                    refinements.push(json!({ "label": label, "at": entry.at }));
-                }
             }
-            Kind::GitState { commit, branch } => git.push(json!({
-                "commit": commit,
-                "branch": branch,
-                "at": entry.at,
-            })),
             Kind::ChildUsage {
                 target,
                 origin,
@@ -496,13 +489,184 @@ fn harness_stats(session: &Session, leaf: &str) -> Value {
     kinds.sort_by_key(|row| std::cmp::Reverse(row["count"].as_u64().unwrap_or_default()));
     json!({
         "custom": kinds,
-        "git": git,
         "children": children.len(),
         "childPrompt": child_prompt,
         "childOutput": child_output,
         "origins": origin_rows,
-        "refinements": refinements,
     })
+}
+
+/// Every refinement the session wrote, newest last. Titles only: the bodies
+/// live in `/api/refinement`, because 28 records carry 117 KB of edit text and
+/// this payload is fetched on every click.
+fn refinement_log(session: &Session, leaf: &str) -> Vec<Value> {
+    let mut rows = Vec::new();
+    for (index, &entry_index) in session.branch(leaf).iter().enumerate() {
+        let Kind::Refinement {
+            summary,
+            scope,
+            edits,
+            ..
+        } = &session.entries[entry_index].kind
+        else {
+            continue;
+        };
+        rows.push(json!({
+            "at": session.entries[entry_index].at,
+            // Position on the branch, which is what the detail endpoint needs
+            // to find this record again without shipping its body here.
+            "entry": index,
+            "summary": summary,
+            "scope": scope,
+            "edits": edits
+                .iter()
+                .map(|edit| json!({
+                    "action": edit.action,
+                    "kind": edit.kind,
+                    "title": edit.title,
+                }))
+                .collect::<Vec<_>>(),
+        }));
+    }
+    rows
+}
+
+/// One refinement record in full, for the page that lists them.
+#[must_use]
+pub fn refinement_text(session: &Session, entry: usize) -> Value {
+    let leaf = session.default_leaf().unwrap_or_default();
+    let path = session.branch(leaf);
+    let Some(&index) = path.get(entry) else {
+        return json!({ "error": format!("no entry {entry} on this branch") });
+    };
+    let Some(raw) = crate::session::raw_line_at(&session.path, session.entries[index].offset).ok()
+    else {
+        return json!({ "error": "cannot read the record from disk" });
+    };
+    let data = raw.get("data").cloned().unwrap_or(Value::Null);
+    let text = |key: &str| data.get(key).and_then(Value::as_str).unwrap_or("").to_string();
+    let edits = data
+        .get("appliedEdits")
+        .and_then(Value::as_array)
+        .map(|rows| {
+            rows.iter()
+                .map(|row| {
+                    json!({
+                        "action": text_of(row, "action"),
+                        "kind": text_of(row, "kind"),
+                        "id": text_of(row, "id"),
+                        "title": text_of(row, "title"),
+                        "path": text_of(row, "path"),
+                        "reason": text_of(row, "reason"),
+                        "content": text_of(row, "content"),
+                    })
+                })
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+    json!({
+        "at": session.entries[index].at,
+        "summary": text("summary"),
+        "rationale": text("rationale"),
+        "expectedOutcome": text("expectedOutcome"),
+        "scope": text("scope"),
+        "edits": edits,
+    })
+}
+
+/// Git snapshots the session recorded: one row per turn that saw a commit.
+/// They are the only record of where the working tree stood during the run.
+fn commit_log(session: &Session, leaf: &str) -> Vec<Value> {
+    session
+        .branch(leaf)
+        .iter()
+        .filter_map(|&index| {
+            let Kind::GitState { commit, branch } = &session.entries[index].kind else {
+                return None;
+            };
+            if commit.is_empty() {
+                return None;
+            }
+            Some(json!({
+                "commit": commit,
+                "branch": branch,
+                "at": session.entries[index].at,
+            }))
+        })
+        .collect()
+}
+
+/// Turns on the branch, counted as user inputs. A turn then fans out into many
+/// model calls (35 on average in p8), so "calls" and "turns" differ by an order
+/// of magnitude and mixing them up makes a session look far busier than it is.
+/// Calls per turn: how many model requests one user message fans out into.
+///
+/// The mean is not the shape. In p8, 444 of 627 turns are under 25 calls and
+/// one is 1,419, so "35 calls per turn" describes almost no turn at all. The
+/// median and the maximum are what say whether the session is a series of
+/// quick turns or a few enormous ones.
+fn calls_per_turn(session: &Session, leaf: &str) -> Value {
+    let mut counts: Vec<u64> = Vec::new();
+    let mut current: Option<u64> = None;
+    for &index in &session.branch(leaf) {
+        match &session.entries[index].kind {
+            Kind::User { .. } => {
+                if let Some(done) = current.replace(0) {
+                    counts.push(done);
+                }
+            }
+            Kind::Assistant { .. } => {
+                if let Some(slot) = current.as_mut() {
+                    *slot += 1;
+                }
+            }
+            _ => {}
+        }
+    }
+    if let Some(done) = current {
+        counts.push(done);
+    }
+    // A user message can be followed immediately by another one -- a queued
+    // follow-up that arrived while the previous turn was still running. Those
+    // turns never reached the model, so they are counted but not averaged in.
+    let all = counts.len();
+    counts.retain(|count| *count > 0);
+    let silent = (all - counts.len()) as u64;
+    if counts.is_empty() {
+        return json!({ "turns": all, "silent": silent, "n": 0,
+                       "median": 0, "mean": 0.0, "max": 0 });
+    }
+    let mut sorted = counts.clone();
+    sorted.sort_unstable();
+    let n = sorted.len();
+    let median = if n.is_multiple_of(2) {
+        (sorted[n / 2 - 1] + sorted[n / 2]) / 2
+    } else {
+        sorted[n / 2]
+    };
+    let total: u64 = sorted.iter().sum();
+    #[allow(clippy::cast_precision_loss)]
+    let mean = total as f64 / n as f64;
+    json!({
+        "turns": all,
+        "silent": silent,
+        "n": n,
+        "median": median,
+        "mean": mean,
+        "max": sorted[n - 1],
+    })
+}
+
+fn turn_count(session: &Session, leaf: &str) -> u64 {
+    session
+        .branch(leaf)
+        .iter()
+        .filter(|&&index| matches!(session.entries[index].kind, Kind::User { .. }))
+        .count() as u64
+}
+
+fn text_of(row: &Value, key: &str) -> String {
+    row.get(key).and_then(Value::as_str).unwrap_or("").to_string()
 }
 
 /// Activity per calendar day: entries and tokens. A session that spans 17 days
@@ -878,6 +1042,31 @@ mod tests {
         );
         assert_eq!(harness["origins"][0]["children"], 1);
         assert_eq!(harness["origins"][0]["tokens"], 3_000);
+    }
+
+    /// A turn is one user message. Some of them are followed by another user
+    /// message before the model answers (a queued follow-up), so counting
+    /// turns and counting calls-per-turn must agree on the total.
+    #[test]
+    fn turns_split_into_answered_and_queued() {
+        let (_dir, path) = write_session(&[
+            r#"{"type":"session","id":"s1","timestamp":"2026-01-01T00:00:00.000Z","cwd":"/tmp"}"#,
+            r#"{"type":"message","id":"u1","parentId":"s1","timestamp":"2026-01-01T00:00:01.000Z","message":{"role":"user","content":"a"}}"#,
+            r#"{"type":"message","id":"a1","parentId":"u1","timestamp":"2026-01-01T00:00:02.000Z","message":{"role":"assistant","content":"x","usage":{"input":10,"output":1,"cacheRead":0,"cacheWrite":0,"totalTokens":11}}}"#,
+            r#"{"type":"message","id":"a2","parentId":"a1","timestamp":"2026-01-01T00:00:03.000Z","message":{"role":"assistant","content":"y","usage":{"input":10,"output":1,"cacheRead":0,"cacheWrite":0,"totalTokens":11}}}"#,
+            // Queued: the model never answered u2 before u3 arrived.
+            r#"{"type":"message","id":"u2","parentId":"a2","timestamp":"2026-01-01T00:00:04.000Z","message":{"role":"user","content":"b"}}"#,
+            r#"{"type":"message","id":"u3","parentId":"u2","timestamp":"2026-01-01T00:00:05.000Z","message":{"role":"user","content":"c"}}"#,
+            r#"{"type":"message","id":"a3","parentId":"u3","timestamp":"2026-01-01T00:00:06.000Z","message":{"role":"assistant","content":"z","usage":{"input":10,"output":1,"cacheRead":0,"cacheWrite":0,"totalTokens":11}}}"#,
+        ]);
+        let session = crate::session::load(&path).expect("load");
+        let payload = detail(&session, None);
+        assert_eq!(payload["turns"], 3, "three user messages");
+        let cpt = &payload["callsPerTurn"];
+        assert_eq!(cpt["turns"], 3);
+        assert_eq!(cpt["silent"], 1, "u2 was superseded before any call");
+        assert_eq!(cpt["n"], 2);
+        assert_eq!(cpt["max"], 2, "the first turn made two calls");
     }
 
 }

@@ -103,6 +103,14 @@ impl Usage {
     }
 }
 
+/// One applied edit inside a refinement record.
+#[derive(Debug, Clone)]
+pub struct RefinementEdit {
+    pub action: String,
+    pub kind: String,
+    pub title: String,
+}
+
 #[derive(Debug, Clone)]
 pub enum Kind {
     User { chars: Chars },
@@ -134,8 +142,17 @@ pub enum Kind {
     /// the model, but they are what the session *did*.
     Custom {
         custom_type: String,
-        /// A short human handle: the goal objective, the refinement summary.
+        /// A short human handle: for a goal snapshot, its objective.
         label: String,
+        chars: Chars,
+    },
+    /// One harness refinement. Its own kind rather than a `Custom` with a
+    /// label: the page that lists them needs the summary, the scope, and what
+    /// each record changed, and none of that fits in a display string.
+    Refinement {
+        summary: String,
+        scope: String,
+        edits: Vec<RefinementEdit>,
         chars: Chars,
     },
     GitState { commit: String, branch: String },
@@ -183,9 +200,10 @@ impl Entry {
             | Kind::Other { chars, .. } => *chars,
             // Custom is harness bookkeeping: it never reaches the model, so it
             // must not inflate any context number.
-            Kind::Custom { .. } | Kind::GitState { .. } | Kind::ChildUsage { .. } => {
-                Chars::default()
-            }
+            Kind::Custom { .. }
+            | Kind::Refinement { .. }
+            | Kind::GitState { .. }
+            | Kind::ChildUsage { .. } => Chars::default(),
             Kind::Compaction { summary_chars, .. } | Kind::BranchSummary { summary_chars } => {
                 *summary_chars
             }
@@ -203,6 +221,7 @@ impl Entry {
             Kind::BranchSummary { .. } => "branch_summary",
             Kind::CustomMessage { .. } => "custom_message",
             Kind::Custom { .. } => "custom",
+            Kind::Refinement { .. } => "refinement",
             Kind::GitState { .. } => "git_state",
             Kind::ChildUsage { .. } => "child_usage",
             Kind::SessionInfo { .. } => "session_info",
@@ -246,6 +265,13 @@ pub fn parse_entry_at(value: &Value, offset: u64) -> Option<Entry> {
 
 /// `provider/model`, or just the model when the provider is absent. Sessions
 /// can change provider mid-run; the pair is what the user configured.
+fn field(row: &Value, key: &str) -> String {
+    row.get(key)
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .to_string()
+}
+
 fn model_label(message: &Value) -> Option<String> {
     let model = message.get("model").and_then(Value::as_str)?;
     if model.is_empty() {
@@ -328,6 +354,36 @@ fn classify(value: &Value) -> Kind {
                 .to_string(),
             chars: str_chars(value.get("content")),
         },
+        "custom" if value.get("customType").and_then(Value::as_str)
+            == Some("prime-agent.refinement") =>
+        {
+            let data = value.get("data");
+            let text = |key: &str, limit: usize| {
+                data.and_then(|data| data.get(key))
+                    .and_then(Value::as_str)
+                    .map(|text| text.chars().take(limit).collect::<String>())
+                    .unwrap_or_default()
+            };
+            let edits = data
+                .and_then(|data| data.get("appliedEdits"))
+                .and_then(Value::as_array)
+                .map(|rows| {
+                    rows.iter()
+                        .map(|row| RefinementEdit {
+                            action: field(row, "action"),
+                            kind: field(row, "kind"),
+                            title: field(row, "title").chars().take(120).collect(),
+                        })
+                        .collect()
+                })
+                .unwrap_or_default();
+            Kind::Refinement {
+                summary: text("summary", 400),
+                scope: text("scope", 24),
+                edits,
+                chars: Chars::default(),
+            }
+        }
         "custom" => Kind::Custom {
             custom_type: value
                 .get("customType")

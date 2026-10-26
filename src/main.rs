@@ -142,6 +142,29 @@ fn serve(dir: &Path, port: u16, open: bool) -> Result<(), String> {
                     None => prime_agent_inspect::http::Response::text(404, "no such session"),
                 }
             }
+            "/api/refinement" => {
+                let session_id = query_value(query, "id").unwrap_or_default();
+                let entry = query_value(query, "entry")
+                    .and_then(|value| value.parse::<usize>().ok())
+                    .unwrap_or(usize::MAX);
+                match resolve_session(&root, &session_id) {
+                    Some(path) => match cache.get(&path) {
+                        Ok(cached) => {
+                            let body =
+                                prime_agent_inspect::web::refinement_text(&cached.session, entry);
+                            match serde_json::to_string(&body) {
+                                Ok(body) => prime_agent_inspect::http::Response::json(body),
+                                Err(error) => prime_agent_inspect::http::Response::text(
+                                    500,
+                                    &format!("cannot serialize: {error}"),
+                                ),
+                            }
+                        }
+                        Err(error) => prime_agent_inspect::http::Response::text(500, &error),
+                    },
+                    None => prime_agent_inspect::http::Response::text(404, "no such session"),
+                }
+            }
             "/api/drop-cache" => {
                 cache.clear();
                 prime_agent_inspect::http::Response::json("{\"ok\":true}".to_string())

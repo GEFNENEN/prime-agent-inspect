@@ -23,16 +23,37 @@ button{background:var(--panel2);color:var(--fg);border:1px solid var(--line);
 button:hover{border-color:var(--accent);color:#fff}
 button:disabled{opacity:.5;cursor:default}
 button.primary{background:var(--accent);border-color:var(--accent);color:#14121a;font-weight:600}
-main{display:grid;grid-template-columns:360px 1fr;height:calc(100vh - 57px)}
-#list{overflow:auto;border-right:1px solid var(--line);background:var(--panel)}
-#list .row{padding:9px 14px;border-bottom:1px solid var(--line);cursor:pointer}
+main{display:grid;grid-template-columns:240px 1fr;height:calc(100vh - 57px)}
+/* Sidebar is a column: a one-line filter, then the list takes the rest and
+   scrolls on its own so the filter never scrolls away. */
+#side{display:flex;flex-direction:column;min-height:0;border-right:1px solid var(--line);
+  background:var(--panel)}
+#filter{display:flex;align-items:center;gap:5px;padding:7px 10px;
+  border-bottom:1px solid var(--line);color:var(--dim);font-size:11px;flex:0 0 auto}
+#filter input{width:46px;background:var(--panel2);color:var(--fg);border:1px solid var(--line);
+  border-radius:5px;padding:2px 6px;font:inherit;font-variant-numeric:tabular-nums;
+  text-align:right}
+#filter input:focus{outline:none;border-color:var(--accent)}
+#filter #filter-note{margin-left:auto;font-variant-numeric:tabular-nums}
+#list{overflow:auto;flex:1 1 auto;min-height:0}
+#list .row{padding:8px 10px 9px 12px;border-bottom:1px solid var(--line);cursor:pointer}
 #list .row:hover{background:var(--panel2)}
 #list .row.active{background:var(--panel2);box-shadow:inset 3px 0 0 var(--accent)}
-#list .row .top{display:flex;justify-content:space-between;gap:8px;align-items:baseline}
-#list .row .name{font-weight:600;font-size:13px}
-#list .row .id{color:var(--dim);font-size:11px;font-family:ui-monospace,Consolas,monospace}
-#list .row .meta{color:var(--dim);font-size:11px;margin-top:2px;display:flex;gap:10px;flex-wrap:wrap}
+#list .row .top{display:flex;gap:6px;align-items:center;min-width:0}
+#list .row .name{font-weight:600;font-size:13px;flex:1 1 auto;min-width:0;
+  overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+#list .row .id{color:var(--dim);font-size:10px;flex:0 0 auto;
+  font-family:ui-monospace,Consolas,monospace}
+#list .row .meta{color:var(--dim);font-size:11px;margin-top:2px;
+  display:flex;gap:8px;flex-wrap:wrap;font-variant-numeric:tabular-nums}
 #list .row .meta b{color:var(--fg);font-weight:600}
+/* Copying a session id is the one action the list offers beyond opening the
+   session; it sits where the id is, not in a menu. */
+.copy{flex:0 0 auto;background:none;border:1px solid transparent;color:var(--dim);
+  border-radius:4px;padding:0 4px;font-size:11px;line-height:16px;height:18px;
+  cursor:pointer;font-family:inherit}
+.copy:hover{border-color:var(--line);color:var(--fg);background:var(--panel2)}
+.copy.done{color:var(--ok);border-color:transparent}
 #detail{overflow:auto;padding:18px 22px}
 .card{background:var(--panel);border:1px solid var(--line);border-radius:10px;
   padding:14px 16px;margin-bottom:16px}
@@ -48,6 +69,21 @@ main{display:grid;grid-template-columns:360px 1fr;height:calc(100vh - 57px)}
 .tabs button.on .count{color:var(--accent)}
 .panel{display:none}
 .panel.on{display:block}
+/* One refinement per row; the summary is the row, the details are behind a
+   click because rationale + expected outcome run to a paragraph each. */
+.ref{padding:9px 8px;border-bottom:1px solid var(--line);cursor:pointer;border-radius:6px}
+.ref:hover{background:var(--panel2)}
+.ref .hd{display:flex;gap:8px;align-items:baseline;font-size:11px;color:var(--dim);
+  font-variant-numeric:tabular-nums}
+.ref .hd .sp{flex:1}
+.ref .sum{margin-top:3px;font-size:12.5px;line-height:1.55;color:var(--fg)}
+.ref .ed{margin-top:5px;display:flex;flex-wrap:wrap;gap:4px}
+.chip{display:inline-block;padding:0 6px;border-radius:4px;font-size:10.5px;
+  background:var(--panel2);color:var(--dim);border:1px solid var(--line);
+  max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.chip.create{color:var(--ok);border-color:rgba(111,191,139,.35)}
+.chip.update{color:var(--warn);border-color:rgba(217,180,94,.35)}
+.chip.delete{color:var(--bad);border-color:rgba(212,106,106,.35)}
 /* Two side-by-side blocks inside one card (ledger types / subagent spend). */
 .cols{display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:20px}
 .cols h3{font-size:12px;margin:0 0 8px;font-weight:600;color:var(--dim);
@@ -84,8 +120,12 @@ main{display:grid;grid-template-columns:360px 1fr;height:calc(100vh - 57px)}
 .meter{height:5px;border-radius:3px;background:rgba(0,0,0,.4);
   display:flex;overflow:hidden;margin-top:7px}
 .meter i{display:block;height:100%}
-.ov-facts{display:grid;grid-template-columns:repeat(auto-fit,minmax(132px,1fr));
+/* Eight facts, four per row. `auto-fit` gave 6 + 2 at 1100px, which reads as
+   two ragged rows of unrelated values; a fixed 4 up front keeps the pairing. */
+.ov-facts{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));
   gap:11px 22px;margin-top:14px;padding-top:13px;border-top:1px solid var(--line)}
+@media (max-width:1180px){.ov-facts{grid-template-columns:repeat(3,minmax(0,1fr))}}
+@media (max-width:900px){.ov-facts{grid-template-columns:repeat(2,minmax(0,1fr))}}
 .ov-facts .f{min-width:0}
 .ov-facts .k{color:var(--dim);font-size:11px}
 .ov-facts .v{font-size:15px;font-weight:600;font-variant-numeric:tabular-nums;
@@ -105,6 +145,8 @@ main{display:grid;grid-template-columns:360px 1fr;height:calc(100vh - 57px)}
 table{width:100%;border-collapse:collapse;font-variant-numeric:tabular-nums}
 th,td{text-align:right;padding:5px 8px;font-size:12px;border-bottom:1px solid var(--line)}
 th:first-child,td:first-child{text-align:left}
+/* Identifiers read left; only measurements are right-aligned. */
+th.l,td.l{text-align:left}
 th{color:var(--dim);font-weight:500;font-size:11px;text-transform:uppercase;letter-spacing:.04em}
 tbody tr:hover{background:var(--panel2)}
 /* The chart's hovered point and its table row are the same compaction; the row
@@ -217,7 +259,15 @@ canvas{width:100%;height:auto;display:block}
 </header>
 <div id="status">就绪</div>
 <main>
-  <div id="list"></div>
+  <div id="side">
+    <div id="filter">
+      <label for="minturns">≥ 轮</label>
+      <input id="minturns" type="number" min="1" step="1" inputmode="numeric" value="1"
+        title="只显示对话轮数不少于这个值的会话；填 1 就是全部">
+      <span id="filter-note"></span>
+    </div>
+    <div id="list"></div>
+  </div>
   <div id="detail"><p class="muted">左侧选择一个会话。</p></div>
 </main>
 
@@ -235,8 +285,14 @@ const RECENT_DEFAULT = 50;
 /// server restarts, but is not shared with another browser or another port.
 const RECENT_KEY = "prime-agent-inspect.recent";
 
+/// Minimum turns a session needs to appear in the list. 1 means "everything
+/// with a conversation"; the sidebar holds 119 sessions, most of them empty
+/// shells, and they bury the handful that matter.
+const MIN_TURNS_KEY = "prime-agent-inspect.minTurns";
+const MIN_TURNS_DEFAULT = 1;
+
 const state = {
-  sessions: [], selected: null, detail: null,
+  sessions: [], selected: null, detail: null, minTurns: loadMinTurns(),
   recent: loadRecent(), shownTotal: 0,
   // What the timeline is currently drawing, plus which point the pointer is
   // on. drawChart and the hit test read the same array, so hovering can never
@@ -311,25 +367,83 @@ async function refreshList() {
 
 function renderList() {
   const el = $("list");
-  if (!state.sessions.length) { el.innerHTML = '<p class="muted" style="padding:14px">没有会话文件。</p>'; return; }
-  el.innerHTML = state.sessions.map((s) => {
+  const note = $("filter-note");
+  if (!state.sessions.length) {
+    el.innerHTML = '<p class="muted" style="padding:14px">没有会话文件。</p>';
+    if (note) note.textContent = "";
+    return;
+  }
+  const visible = visibleSessions();
+  if (note) {
+    note.textContent = visible.length === state.sessions.length
+      ? `${num(visible.length)} 个`
+      : `${num(visible.length)} / ${num(state.sessions.length)}`;
+  }
+  if (!visible.length) {
+    el.innerHTML = `<p class="muted" style="padding:14px">没有 ≥${num(state.minTurns)} 轮的会话。</p>`;
+    return;
+  }
+  // Two lines only: name identifies it, id is the handle you paste somewhere,
+  // turns + size say how big the job was. Peak and compaction counts are in
+  // the detail page, one click away, and in a 240px column they were noise.
+  el.innerHTML = visible.map((s) => {
     const active = s.id === state.selected ? " active" : "";
-    const label = s.name ? esc(s.name) : esc(s.id.slice(0, 13));
-    const near = s.peak > 0 ? "" : "";
+    // Falling back to the id printed it twice: the id already sits in its own
+    // column right next to the name.
+    const label = s.name ? esc(s.name) : '<span class="muted">未命名</span>';
     return `<div class="row${active}" data-id="${esc(s.id)}">
-      <div class="top"><span class="name">${label}</span>
-        <span class="id">${esc(s.id.slice(0, 8))}</span></div>
+      <div class="top"><span class="name" title="${esc(s.id)}">${label}</span>
+        <span class="id">${esc(s.id.slice(0, 8))}</span>
+        <button class="copy" data-copy="${esc(s.id)}"
+          title="复制完整会话 id：${esc(s.id)}">复制</button></div>
       <div class="meta">
+        ${s.turns ? `<span><b>${num(s.turns)}</b> 轮</span>`
+          : '<span title="只有会话元数据，没有消息">无对话</span>'}
         <span>${bytes(s.bytes)}</span>
-        <span>${num(s.entries)} 条</span>
-        <span>压缩 <b>${num(s.compactions)}</b></span>
-        <span>峰值 <b>${num(s.peak)}</b></span>
       </div>
     </div>`;
   }).join("");
   el.querySelectorAll(".row").forEach((row) => {
     row.addEventListener("click", () => openSession(row.dataset.id));
   });
+  el.querySelectorAll(".copy").forEach((button) => {
+    button.addEventListener("click", (event) => {
+      // The row opens the session; copying is not opening.
+      event.stopPropagation();
+      copyText(button.dataset.copy, button);
+    });
+  });
+}
+
+/// The clipboard API needs a secure context, which `http://127.0.0.1` is; the
+/// textarea fallback is for a page opened over `file://` while developing.
+function copyText(text, button) {
+  const flash = (ok) => {
+    const before = button.textContent;
+    button.textContent = ok ? "已复制" : "失败";
+    button.classList.toggle("done", ok);
+    setTimeout(() => {
+      button.textContent = before;
+      button.classList.remove("done");
+    }, 1100);
+  };
+  if (navigator.clipboard && navigator.clipboard.writeText) {
+    navigator.clipboard.writeText(text).then(() => flash(true), () => flash(false));
+    return;
+  }
+  try {
+    const area = document.createElement("textarea");
+    area.value = text;
+    area.style.position = "fixed";
+    area.style.opacity = "0";
+    document.body.appendChild(area);
+    area.select();
+    const ok = document.execCommand("copy");
+    document.body.removeChild(area);
+    flash(ok);
+  } catch (error) {
+    flash(false);
+  }
 }
 
 async function openSession(id, keepScroll) {
@@ -361,7 +475,10 @@ function renderDetail(d) {
   const contentShare = full ? content / full : 0;
   const fixedShare = full ? fixedTokens / full : 0;
   const spanMs = d.lastAt && d.firstAt ? d.lastAt - d.firstAt : 0;
+  // Entries per compaction, not turns: 232 compactions over 56k entries is
+  // 243 entries each, while the session only had 627 user messages in total.
   const perCompaction = d.timeline.length ? d.branchEntries / d.timeline.length : 0;
+  const cpt = d.callsPerTurn || { n: 0, median: 0, mean: 0, max: 0 };
   const accuracy = d.accuracy;
   const acc = accuracy
     ? `<span class="pill ${accuracy.median < 0.1 ? "ok" : "warn"}"
@@ -406,10 +523,10 @@ function renderDetail(d) {
     <div class="ov-facts">
       <div class="f"><div class="k">存在时长</div>
         <div class="v">${spanMs ? dur(spanMs) : "—"}</div>
-        <div class="sub">${when(d.firstAt)} → ${when(d.lastAt)}</div></div>
+        <div class="sub" title="${whenFull(d.firstAt)} → ${whenFull(d.lastAt)}">${when(d.firstAt)} → ${when(d.lastAt)}</div></div>
       <div class="f"><div class="k">压缩</div>
         <div class="v">${num(d.timeline.length)} <small>次</small></div>
-        <div class="sub">平均 ${num(Math.round(perCompaction))} 轮/次</div></div>
+        <div class="sub">平均 ${num(Math.round(perCompaction))} 条目/次</div></div>
       <div class="f"><div class="k">条目</div>
         <div class="v">${num(d.branchEntries)}</div>
         <div class="sub">${d.branchEntries !== d.entries
@@ -417,9 +534,9 @@ function renderDetail(d) {
       <div class="f"><div class="k">文件大小</div>
         <div class="v">${bytes(d.bytes)}</div>
         <div class="sub">${d.entries ? num(Math.round(d.bytes / d.entries)) + " B/条" : ""}</div></div>
-      <div class="f"><div class="k">模型调用</div>
-        <div class="v">${num(cache.calls || 0)}</div>
-        <div class="sub">${(d.models || []).length} 个模型</div></div>
+      <div class="f"><div class="k">对话轮数</div>
+        <div class="v">${num(d.turns || 0)}</div>
+        <div class="sub" title="一轮 = 你发的一条消息；一个回合里 agent 会连续调用模型很多次（工具结果回来后接着跑）——中位 ${num(cpt.median)} 次，最多 ${num(cpt.max)} 次${cpt.silent ? `。另有 ${num(cpt.silent)} 条消息紧跟着上一条发出（前一轮还没答完），没触发调用` : ""}">你发的消息数 · 中位 ${num(cpt.median)} 次调用/轮</div></div>
       <div class="f"><div class="k">缓存命中</div>
         <div class="v">${cache.sent ? pct(cache.hit) : "—"}</div>
         <div class="sub">${cache.sent ? num(cache.cacheRead) + " / " + num(cache.sent) : "无数据"}</div></div>
@@ -450,6 +567,8 @@ function renderDetail(d) {
     { id: "usage", label: "用量与模型", count: num((d.models || []).length) },
     { id: "daily", label: "每日活动", count: num((d.daily || []).length) + " 天" },
     { id: "harness", label: "账本", count: num((h.children || 0)) + " 子会话" },
+    { id: "refine", label: "改进记录", count: num((d.refinements || []).length) + " 条" },
+    { id: "git", label: "提交", count: num((d.commits || []).length) + " 个" },
   ];
   const tabbar = `<div class="tabs" id="tabs">${tabs.map((t) =>
     `<button data-panel="${t.id}">${esc(t.label)}<span class="count">${t.count}</span></button>`
@@ -465,10 +584,71 @@ function renderDetail(d) {
   panels.push(`<div class="panel" id="panel-usage">${usageCard(d)}</div>`);
   panels.push(`<div class="panel" id="panel-daily">${dailyCard(d)}</div>`);
   panels.push(`<div class="panel" id="panel-harness">${harnessCard(d)}</div>`);
+  panels.push(`<div class="panel" id="panel-refine">${refinementCard(d)}</div>`);
+  panels.push(`<div class="panel" id="panel-git">${commitCard(d)}</div>`);
 
   $("detail").innerHTML = overview + tabbar + panels.join("");
   setupComposition(d, compItems);
   setupTabs(d);
+  setupRefinements(d);
+}
+
+/// Refinement rows fetch their body on click: the detail payload carries the
+/// summary and the edit titles, while rationale + expected outcome + edit
+/// bodies are 117 KB for this session and would be paid on every session click.
+function setupRefinements(d) {
+  const list = $("refine-list");
+  if (!list) return;
+  list.addEventListener("click", (event) => {
+    const row = event.target.closest(".ref");
+    if (!row) return;
+    openRefinement(Number(row.dataset.entry));
+  });
+}
+
+async function openRefinement(entry) {
+  hideTip();
+  const el = viewerEl();
+  el.classList.add("open");
+  el.querySelector("#v-title").textContent = "改进记录";
+  el.querySelector("#v-meta").textContent = "";
+  el.querySelector("#v-body").innerHTML = '<p class="empty">载入中…</p>';
+  el.querySelector("#v-info").textContent = "";
+  el.querySelector("#v-prev").disabled = true;
+  el.querySelector("#v-next").disabled = true;
+  viewer.label = null; // paging does not apply to a single record
+  try {
+    const data = await getJSON(`/api/refinement?id=${encodeURIComponent(state.selected)}`
+      + `&entry=${entry}`);
+    if (data.error) throw new Error(data.error);
+    el.querySelector("#v-meta").textContent =
+      `${whenFull(data.at).slice(0, 16)} · ${data.scope || "?"} · ${num((data.edits || []).length)} 处改动`;
+    const block = (title, text) => text
+      ? `<div class="ent"><div class="head"><span class="k">${esc(title)}</span></div>
+          <pre>${esc(text)}</pre></div>` : "";
+    const edits = (data.edits || []).map((e) =>
+      `<div class="ent">
+        <div class="head">
+          <span class="k">${esc(e.action)} ${esc(e.kind)}</span>
+          <span class="sp"></span>
+          <span class="tag">${esc(e.path || "")}</span>
+        </div>
+        <div style="font-weight:600;margin-bottom:4px">${esc(e.title)}</div>
+        <div class="role">id</div>
+        <pre>${esc(e.id)}</pre>
+        ${e.reason ? `<div class="role">理由</div><pre>${esc(e.reason)}</pre>` : ""}
+        ${e.content ? `<div class="role">内容</div><pre>${esc(e.content)}</pre>` : ""}
+      </div>`).join("");
+    el.querySelector("#v-body").innerHTML =
+      block("摘要", data.summary)
+      + block("为什么", data.rationale)
+      + block("预期效果", data.expectedOutcome)
+      + `<div class="ent"><div class="head"><span class="k">改动 (${num((data.edits || []).length)})</span></div></div>`
+      + (edits || '<p class="empty">这条记录没有改动明细。</p>');
+    el.querySelector("#v-body").scrollTop = 0;
+  } catch (error) {
+    el.querySelector("#v-body").innerHTML = `<p class="empty">载入失败：${esc(error.message)}</p>`;
+  }
 }
 
 /// One panel at a time. The chart is only laid out once its panel is visible —
@@ -568,9 +748,9 @@ function timelineCards(d) {
       <th>保留尾 <span class="q" data-q="retained">?</span></th>
       <th>notice <span class="q" data-q="notice">?</span></th>
       <th>副本 <span class="q" data-q="copies">?</span></th>
-      <th>间隔轮数 <span class="q" data-q="turns">?</span></th>
+      <th>间隔调用 <span class="q" data-q="turns">?</span></th>
     </tr></thead><tbody id="timeline-body"></tbody></table></div>
-    <p class="hint">倒序排列，最新在上。「间隔轮数」小于 10 表示在连环压缩——这是要排查的形态。
+    <p class="hint">倒序排列，最新在上。「间隔调用」数的是模型请求次数，小于 10 表示在连环压缩——这是要排查的形态。
       悬停图表上的点或这里的任意一行，看这一次压缩的完整信息。
       点列名旁的小问号看这一列到底在数什么。</p></div>`;
 }
@@ -715,26 +895,12 @@ function dailyCard(d) {
 /// the model — it is the record of what the session did, kept in the same file.
 function harnessCard(d) {
   const h = d.harness || { custom: [], git: [], origins: [] };
-  const refinements = h.refinements || [];
   const customRows = (h.custom || []).map((c) =>
     `<tr><td class="mono">${esc(c.type)}</td><td>${num(c.count)}</td></tr>`).join("");
   const originTotal = (h.origins || []).reduce((sum, o) => sum + o.tokens, 0);
   const originRows = (h.origins || []).map((o) =>
     `<tr><td class="mono">${esc(o.origin)}</td><td>${num(o.children)}</td><td>${num(o.tokens)}</td>
       <td>${originTotal ? pct(o.tokens / originTotal) : "—"}</td><td>${num(o.output || 0)}</td></tr>`).join("");
-  const git = h.git || [];
-  // Commits repeat: one `git_state` row per turn that saw a commit.
-  const seen = new Set();
-  const commits = [];
-  for (const g of git) {
-    if (!g.commit || seen.has(g.commit)) continue;
-    seen.add(g.commit);
-    commits.push(g);
-  }
-  const commitRows = commits.slice(-20).reverse().map((g) =>
-    `<tr><td class="mono">${esc(g.commit.slice(0, 8))}</td>
-      <td class="mono">${esc(g.branch || "")}</td>
-      <td class="muted">${whenFull(g.at).slice(0, 16)}</td></tr>`).join("");
   return `<div class="card"><h2>子代理开销
       <span class="muted" style="text-transform:none;letter-spacing:0">${num(h.children || 0)} 个子会话 · ${num(h.childPrompt || 0)} tokens</span></h2>
     <table><thead><tr><th>来源</th><th>子会话</th><th>prompt</th><th>占比</th><th>生成</th></tr></thead>
@@ -751,20 +917,92 @@ function harnessCard(d) {
     <table><thead><tr><th>类型</th><th>条数</th></tr></thead>
     <tbody>${customRows || '<tr><td class="muted">无</td></tr>'}</tbody></table>
     <p class="hint"><code>thread_goal_state</code> 是目标状态快照，几乎每轮都会写一份；
-      <code>prime-agent.refinement</code> 是每次自我改进的记录。它们占了条目数的一成多，
-      但不占一个 token 的上下文。</p>
-    ${refinements.length ? `<h3 style="margin:16px 0 8px;font-size:12px;color:var(--dim);
-      text-transform:uppercase;letter-spacing:.05em">改进记录</h3>
-      <div class="tablewrap" style="max-height:280px"><table><tbody>${refinements.slice().reverse().map((r) =>
-        `<tr><td class="muted" style="white-space:nowrap">${whenFull(r.at).slice(5, 16)}</td>
-          <td style="text-align:left;line-height:1.5">${esc(r.label)}</td></tr>`).join("")}</tbody></table></div>
-      <p class="hint">每次持续 harness 精炼写下的摘要，倒序。这些是会话对自己做了什么改动的记录。</p>` : ""}
-  </div>
-  ${commits.length ? `<div class="card"><h2>提交
-      <span class="muted" style="text-transform:none;letter-spacing:0">${num(commits.length)} 个</span></h2>
-    <div class="tablewrap" style="max-height:300px"><table><thead><tr><th>commit</th><th>分支</th><th>时间</th></tr></thead>
-    <tbody>${commitRows}</tbody></table></div>
-    <p class="hint">只列最近 20 个。同一个 commit 会在多轮里重复出现（一轮一个 <code>git_state</code> 快照），这里已去重。</p></div>` : ""}`;
+      <code>refinement</code> 是每次自我改进的记录。它们占了条目数的一成多，
+      但不占一个 token 的上下文。改进记录在「改进记录」页，git 快照在「提交」页。</p>
+  </div>`;
+}
+
+/// Refinements, one row each. Newest first: the last refinement is the one that
+/// describes the memory as it stands now.
+function refinementCard(d) {
+  const rows = d.refinements || [];
+  if (!rows.length) {
+    return `<div class="card"><h2>改进记录</h2>
+      <p class="hint">这个会话没有写过改进记录。持续 harness 每次精炼时会在会话文件里留下一条。</p></div>`;
+  }
+  const byKind = {};
+  let edits = 0;
+  for (const r of rows) {
+    for (const e of r.edits || []) {
+      edits += 1;
+      byKind[e.kind] = (byKind[e.kind] || 0) + 1;
+    }
+  }
+  const kindLine = Object.entries(byKind)
+    .sort((a, b) => b[1] - a[1])
+    .map(([kind, count]) => `${esc(kind)} ${num(count)}`).join(" · ");
+  const cards = rows.slice().reverse().map((r) => {
+    const chips = (r.edits || []).map((e) =>
+      `<span class="chip ${esc(e.action)}" title="${esc(e.action + " " + e.kind)}：${esc(e.title)}">${
+        esc(e.action)} ${esc(e.kind)} · ${esc(e.title)}</span>`).join("");
+    return `<div class="ref" data-entry="${r.entry}" title="点击查看完整记录">
+        <div class="hd"><span>${whenFull(r.at).slice(5, 16)}</span>
+          <span class="tag">${esc(r.scope || "?")}</span>
+          <span class="sp"></span>
+          <span>${num((r.edits || []).length)} 处改动</span></div>
+        <div class="sum">${esc(r.summary || "（这条记录没有摘要）")}</div>
+        ${chips ? `<div class="ed">${chips}</div>` : ""}
+      </div>`;
+  }).join("");
+  return `<div class="card"><h2>改进记录
+      <span class="muted" style="text-transform:none;letter-spacing:0">${num(rows.length)} 条 · ${num(edits)} 处改动 · ${kindLine}</span></h2>
+    <div id="refine-list">${cards}</div>
+    <p class="hint">每次持续 harness 精炼写下的记录，最新在上。标签是改动落在哪一层：
+      <code>memory</code> 记忆、<code>prompt</code> 提示补充、<code>skill</code> 技能；
+      绿=新建，黄=更新。点一条看它的完整理由、预期效果与被改条目的正文。</p></div>`;
+}
+
+/// Git snapshots. One row per turn that saw a commit, deduplicated: the same
+/// commit can be recorded by several turns when the tree does not move.
+function commitCard(d) {
+  const rows = d.commits || [];
+  if (!rows.length) {
+    return `<div class="card"><h2>提交</h2>
+      <p class="hint">这个会话没有记录到 git 快照。快照来自每轮的 <code>git_state</code>。</p></div>`;
+  }
+  const seen = new Set();
+  const unique = [];
+  for (const row of rows) {
+    if (seen.has(row.commit)) continue;
+    seen.add(row.commit);
+    unique.push(row);
+  }
+  const perDay = {};
+  for (const row of unique) {
+    const day = whenFull(row.at).slice(0, 10);
+    perDay[day] = (perDay[day] || 0) + 1;
+  }
+  const dayLine = Object.entries(perDay).sort()
+    .map(([day, count]) => `${day.slice(5)} ${num(count)}`).join(" · ");
+  const branches = Array.from(new Set(unique.map((r) => r.branch).filter(Boolean)));
+  const cards = unique.slice().reverse().map((row, i) => {
+    const prev = unique[unique.length - 2 - i];
+    const gap = prev ? row.at - prev.at : 0;
+    return `<tr>
+      <td class="mono">${esc(row.commit.slice(0, 8))}</td>
+      <td class="mono muted l">${esc(row.branch || "")}</td>
+      <td class="muted">${whenFull(row.at).slice(0, 16)}</td>
+      <td class="muted">${gap ? dur(gap) : "—"}</td></tr>`;
+  }).join("");
+  return `<div class="card"><h2>提交
+      <span class="muted" style="text-transform:none;letter-spacing:0">${num(unique.length)} 个 · ${esc(branches.join(", ") || "无分支信息")}</span></h2>
+    <p class="hint" style="margin:0 0 10px">${esc(dayLine)}</p>
+    <div class="tablewrap" style="max-height:520px"><table><thead><tr>
+      <th>commit</th><th class="l">分支</th><th>时间</th><th>距上一个</th>
+    </tr></thead><tbody>${cards}</tbody></table></div>
+    <p class="hint">每轮结束时的 <code>git_state</code> 快照，按 commit 去重。这份文件记了
+      ${num(rows.length)} 行、${num(unique.length)} 个不同的 commit——同一轮里父条目会重复记录同一个 HEAD。
+      「距上一个」看的是提交节奏，不是工作时长。</p></div>`;
 }
 
 function loadRecent() {
@@ -778,6 +1016,26 @@ function loadRecent() {
 
 function saveRecent(value) {
   try { window.localStorage.setItem(RECENT_KEY, String(value)); } catch (_) {}
+}
+
+function loadMinTurns() {
+  try {
+    const raw = window.localStorage.getItem(MIN_TURNS_KEY);
+    const value = raw == null ? NaN : Number.parseInt(raw, 10);
+    if (Number.isFinite(value) && value >= 1) return value;
+  } catch (_) { /* blocked storage: the default is fine */ }
+  return MIN_TURNS_DEFAULT;
+}
+
+function saveMinTurns(value) {
+  try { window.localStorage.setItem(MIN_TURNS_KEY, String(value)); } catch (_) {}
+}
+
+/// Sessions passing the filter, in the order the server sent them (most recent
+/// activity first). Filtering only the list, never `state.sessions`: the count
+/// in the note and the rows must come from the same place.
+function visibleSessions() {
+  return state.sessions.filter((s) => (s.turns || 0) >= state.minTurns);
 }
 
 /// The tail of the (chronological) timeline, per the current setting.
@@ -1117,10 +1375,12 @@ const COLUMN_HELP = {
       kernel 状态的旧副本没有被清掉，一直在随上下文走。`,
   },
   turns: {
-    title: "间隔轮数",
-    body: `距离上一次压缩，中间过了多少轮 assistant 调用。小于 10 就是在连环压缩：
-      上一轮刚压完，几轮之后又满了，通常是某一次工具输出或某条注入消息特别大。
-      这是排查上下文膨胀的第一个筛选条件。`,
+    title: "间隔调用",
+    body: `距离上一次压缩，中间有多少次 assistant 调用（= 模型请求次数）。
+      注意这是**调用**不是「轮」：一轮对话里 agent 会连续调用几十次模型
+      （工具结果回来后继续），所以一次压缩往往对应几千次调用、而只有一两轮对话。
+      小于 10 就是在连环压缩：刚压完没几次调用又满了，通常是某次工具输出
+      或某条注入消息特别大。这是排查上下文膨胀的第一个筛选条件。`,
   },
 };
 
@@ -1539,11 +1799,35 @@ function drawChart(timeline) {
   }
 }
 
+/// The filter commits on Enter / blur, not on every keystroke: typing "12" on
+/// the way to "120" would blank the list twice.
+function setupFilter() {
+  const input = $("minturns");
+  if (!input) return;
+  input.value = String(state.minTurns);
+  const apply = () => {
+    const value = Number.parseInt(input.value, 10);
+    state.minTurns = Number.isFinite(value) && value >= 1 ? value : MIN_TURNS_DEFAULT;
+    input.value = String(state.minTurns);
+    saveMinTurns(state.minTurns);
+    renderList();
+  };
+  input.addEventListener("change", apply);
+  input.addEventListener("keydown", (event) => {
+    if (event.key === "Enter") {
+      event.preventDefault();
+      input.blur();
+    }
+  });
+  apply();
+}
+
 $("refresh").addEventListener("click", refreshList);
 document.addEventListener("keydown", (e) => {
   if (e.key === "r" && (e.ctrlKey || e.metaKey)) { e.preventDefault(); refreshList(); }
 });
 
+setupFilter();
 refreshList();
 </script>
 </body>
