@@ -290,7 +290,7 @@ fn parse_header(value: &Value) -> Header {
 fn duplicate_custom_types(session: &Session) -> Vec<(String, u64, u64)> {
     let mut counts: HashMap<&str, (u64, u64)> = HashMap::new();
     for entry in &session.entries {
-        if let Kind::CustomMessage { custom_type, chars } = &entry.kind {
+        if let Kind::CustomMessage { custom_type, chars, .. } = &entry.kind {
             let slot = counts.entry(custom_type.as_str()).or_insert((0, 0));
             slot.0 += 1;
             slot.1 += chars.total();

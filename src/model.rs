@@ -43,6 +43,24 @@ fn is_cjk(ch: char) -> bool {
         || (0xAC00..=0xD7AF).contains(&code)
 }
 
+/// What an assistant message's characters consisted of.
+///
+/// `chars` is the sum of these three; keeping them separate is what lets the
+/// UI answer "how much of what the model wrote was reasoning".
+#[derive(Debug, Clone, Copy, Default)]
+pub struct OutputSplit {
+    pub thinking: u64,
+    pub text: u64,
+    pub tool_args: u64,
+}
+
+impl OutputSplit {
+    #[must_use]
+    pub fn total(self) -> u64 {
+        self.thinking + self.text + self.tool_args
+    }
+}
+
 /// Provider-reported accounting for one model call.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct Usage {
@@ -116,6 +134,11 @@ pub enum Kind {
     User { chars: Chars },
     Assistant {
         chars: Chars,
+        /// How the generated text split between reasoning, prose, and tool
+        /// call arguments. Only counts, never text -- the analyzer never keeps
+        /// a body in memory. A usage table reports one `output` number, which
+        /// hides that reasoning is usually the larger half.
+        output: OutputSplit,
         usage: Option<Usage>,
         /// `provider/model` as reported by the call, so the detail view can
         /// show which models this session actually ran on. A session that
@@ -128,6 +151,10 @@ pub enum Kind {
         /// Failed tool calls are a different story from successful ones: they
         /// are usually long error text that the model then works around.
         is_error: bool,
+        /// Milliseconds the tool itself reported taking. Present on 99.9% of
+        /// results and *not* the same thing as the gap between the call and
+        /// its result: that gap also includes scheduling and the kernel wake-up.
+        duration_ms: Option<u64>,
     },
     Compaction {
         summary_chars: Chars,
@@ -136,7 +163,15 @@ pub enum Kind {
         usage: Option<Usage>,
     },
     BranchSummary { summary_chars: Chars },
-    CustomMessage { custom_type: String, chars: Chars },
+    CustomMessage {
+        custom_type: String,
+        chars: Chars,
+        /// The record's `details`, kept only for the failure types. They are
+        /// ~100 records in a 200 MB file, and they hold the only record of what
+        /// went wrong (`attempts`, `success`, `error`). Everything else is
+        /// dropped, so this cannot become a second copy of the transcript.
+        detail: Option<Box<Value>>,
+    },
     /// `type: "custom"` — harness bookkeeping rather than transcript. The goal
     /// state snapshots and refinement records live here; they are not sent to
     /// the model, but they are what the session *did*.
@@ -299,6 +334,7 @@ fn classify(value: &Value) -> Kind {
                 "user" => Kind::User { chars },
                 "assistant" => Kind::Assistant {
                     chars,
+                    output: output_split_of(message),
                     usage: message.get("usage").and_then(parse_usage),
                     model: model_label(message),
                 },
@@ -323,6 +359,10 @@ fn classify(value: &Value) -> Kind {
                         .get("isError")
                         .and_then(Value::as_bool)
                         .unwrap_or(false),
+                    duration_ms: message
+                        .get("details")
+                        .and_then(|details| details.get("durationMs"))
+                        .and_then(Value::as_u64),
                 },
                 other => Kind::Other {
                     kind: format!("message:{other}"),
@@ -353,6 +393,8 @@ fn classify(value: &Value) -> Kind {
                 .unwrap_or("")
                 .to_string(),
             chars: str_chars(value.get("content")),
+            detail: keeps_detail(value.get("customType").and_then(Value::as_str).unwrap_or(""))
+                .then(|| Box::new(value.get("details").cloned().unwrap_or(Value::Null))),
         },
         "custom" if value.get("customType").and_then(Value::as_str)
             == Some("prime-agent.refinement") =>
@@ -617,6 +659,25 @@ impl Chars {
     }
 }
 
+/// Custom message types whose `details` are worth keeping after parsing.
+///
+/// Only the failure records: they are the sole account of what went wrong, they
+/// number in the low hundreds even in a 200 MB session, and without them a
+/// session with 39 empty model replies looks healthy. Keeping `details` for
+/// every custom message would be a second copy of the transcript.
+fn keeps_detail(custom_type: &str) -> bool {
+    matches!(
+        custom_type,
+        "provider_retry_outcome"
+            | "model_prompt_error"
+            | "compaction_outcome"
+            | "rlm_child_failure"
+            | "rlm_child_terminal_notice"
+            | "async_bash_completion"
+            | "session_slash_command_result"
+    )
+}
+
 fn str_chars(value: Option<&Value>) -> Chars {
     value.map_or_else(Chars::default, value_chars)
 }
@@ -662,6 +723,47 @@ fn message_chars(message: &Value) -> Chars {
         chars.add_chars(value_chars(content));
     }
     chars
+}
+
+/// Split an assistant message's content into reasoning / prose / tool arguments.
+///
+/// Only counts. `message_chars` already sums the same fields; this walks the
+/// blocks once more to attribute them, which is a few hundred milliseconds on
+/// a 200 MB file and buys a view that usage alone cannot provide.
+fn output_split_of(message: &Value) -> OutputSplit {
+    let mut split = OutputSplit::default();
+    let Some(content) = message.get("content") else {
+        return split;
+    };
+    let Some(blocks) = content.as_array() else {
+        return split;
+    };
+    for block in blocks {
+        let kind = block.get("type").and_then(Value::as_str).unwrap_or("");
+        match kind {
+            "thinking" => {
+                split.thinking += str_chars(block.get("thinking").or_else(|| block.get("text")))
+                    .total();
+            }
+            "text" => {
+                split.text += str_chars(block.get("text")).total();
+            }
+            "toolCall" | "tool_use" => {
+                // The arguments are what the model had to emit; the call id and
+                // name are a handful of characters and belong to neither side.
+                // `arguments` is a tool-specific JSON blob, so the key
+                // whitelist would count nothing inside it. Same rule as
+                // `is_payload_field`: the model emitted all of it.
+                let args = block
+                    .get("arguments")
+                    .or_else(|| block.get("input"))
+                    .map_or(0, |value| value_chars_filtered(value, true).total());
+                split.tool_args += args;
+            }
+            _ => {}
+        }
+    }
+    split
 }
 
 /// Object keys whose values are model-facing text. Arguments and results are

@@ -564,10 +564,14 @@ function renderDetail(d) {
     { id: "kinds", label: "条目构成", count: num(d.entryKinds.length) },
     { id: "notes", label: "重复注入", count: num((d.notices || []).length) },
     { id: "tools", label: "工具", count: num((d.tools || []).length) },
+    { id: "time", label: "时间", count: span((d.time || {}).activeSecs || 0) },
     { id: "usage", label: "用量与模型", count: num((d.models || []).length) },
     { id: "daily", label: "每日活动", count: num((d.daily || []).length) + " 天" },
-    { id: "harness", label: "账本", count: num((h.children || 0)) + " 子会话" },
+    { id: "children", label: "子代理", count: num((d.children || []).length) },
     { id: "refine", label: "改进记录", count: num((d.refinements || []).length) + " 条" },
+    { id: "failures", label: "失败账", count: num(((d.failures || {}).toolErrors || 0)
+      + ((d.failures || {}).emptyReplies || 0) + ((d.failures || {}).providerRetryFailed || 0)) },
+    { id: "harness", label: "记录类型", count: num(((d.harness || {}).custom || []).length) },
     { id: "git", label: "提交", count: num((d.commits || []).length) + " 个" },
   ];
   const tabbar = `<div class="tabs" id="tabs">${tabs.map((t) =>
@@ -581,9 +585,12 @@ function renderDetail(d) {
   panels.push(`<div class="panel" id="panel-kinds">${kindsCard(d)}</div>`);
   panels.push(`<div class="panel" id="panel-notes">${noticesCard(d)}</div>`);
   panels.push(`<div class="panel" id="panel-tools">${toolsCard(d)}</div>`);
+  panels.push(`<div class="panel" id="panel-time">${timeCard(d)}</div>`);
   panels.push(`<div class="panel" id="panel-usage">${usageCard(d)}</div>`);
   panels.push(`<div class="panel" id="panel-daily">${dailyCard(d)}</div>`);
   panels.push(`<div class="panel" id="panel-harness">${harnessCard(d)}</div>`);
+  panels.push(`<div class="panel" id="panel-children">${childrenCard(d)}</div>`);
+  panels.push(`<div class="panel" id="panel-failures">${failureCard(d)}</div>`);
   panels.push(`<div class="panel" id="panel-refine">${refinementCard(d)}</div>`);
   panels.push(`<div class="panel" id="panel-git">${commitCard(d)}</div>`);
 
@@ -821,6 +828,218 @@ function toolsCard(d) {
       要不要收紧输出上限的依据：一次返回几万字符的工具，几百次调用就能占满一个窗口。</p></div>`;
 }
 
+/// Seconds as a compact human span: 86.9 h, 27.0 h, 7.9 s.
+function span(secs) {
+  if (!secs) return "—";
+  if (secs < 90) return secs.toFixed(1) + " 秒";
+  if (secs < 5400) return (secs / 60).toFixed(1) + " 分";
+  return (secs / 3600).toFixed(1) + " 小时";
+}
+
+/// Where the clock went, what the tools cost in time, and which single entries
+/// were the most expensive to keep.
+///
+/// The time split answers a question no usage table can: 86.9 of 113.9 active
+/// hours in p8 were spent waiting on the provider, not running tools. That is
+/// the number that says whether making the agent faster means batching calls or
+/// trimming tool output.
+function timeCard(d) {
+  const t = d.time || {};
+  const tools = d.toolTime || [];
+  const biggest = d.biggest || [];
+  const o = d.output || {};
+  const active = t.activeSecs || 0;
+  if (!active) return "";
+  const idle = t.idleSecs || 0;
+  const model = t.modelSecs || 0;
+  const tool = t.toolSecs || 0;
+  const bar = (part, color, label) => part <= 0 ? "" :
+    `<span title="${esc(label)}" style="width:${(part / active * 100).toFixed(2)}%;
+      background:${color};display:block;height:100%"></span>`;
+  const toolRows = tools.map((x) => `<tr>
+      <td class="mono">${esc(x.tool)}</td>
+      <td>${num(x.calls)}</td>
+      <td>${span(x.seconds)}</td>
+      <td>${span(x.medianMs / 1000)}</td>
+      <td>${span(x.maxMs / 1000)}</td>
+      <td>${num(Math.round(x.charsPerSecond))}</td></tr>`).join("");
+  const bigRows = biggest.map((x) => `<tr>
+      <td class="mono">${esc(x.kind)}${x.tool ? ` <span class="muted">${esc(x.tool)}</span>` : ""}</td>
+      <td>${num(x.chars)}</td>
+      <td>${num(x.calls)}</td>
+      <td>${num(x.cost)}</td>
+      <td class="muted">${when(x.at)}</td></tr>`).join("");
+  return `<div class="card"><h2>时间去向
+      <span class="muted" style="text-transform:none;letter-spacing:0">活跃 ${span(active)} · 空闲 ${span(idle)}</span></h2>
+    <div class="ov-hero" style="grid-template-columns:repeat(3,minmax(0,1fr))">
+      <div><div class="k">等模型</div>
+        <div class="v">${span(model)}</div>
+        <div class="sub">${num(t.modelCalls || 0)} 次 · 中位 ${span(t.modelMedian)} · p90 ${span(t.modelP90)}</div></div>
+      <div><div class="k">跑工具</div>
+        <div class="v">${span(tool)}</div>
+        <div class="sub">${num(t.toolCalls || 0)} 次 · 中位 ${span(t.toolMedian)} · p90 ${span(t.toolP90)}</div></div>
+      <div><div class="k">工具自报耗时</div>
+        <div class="v">${span(t.measuredToolSecs)}</div>
+        <div class="sub">${num(t.measuredToolCalls || 0)} 次带 durationMs</div></div>
+    </div>
+    <div class="bar" style="height:8px;margin-top:14px;display:flex;gap:1px">
+      ${bar(model, "var(--accent)", "等模型 " + span(model))}
+      ${bar(tool, "#d9b45e", "跑工具 " + span(tool))}
+    </div>
+    <p class="hint">时间取自相邻两条记录的时间戳之差，有两条规则：只算 user / assistant /
+      toolResult 三类记录（账本类记录是批量写入的，算进去会凭空多出 40% 的时间），
+      超过 ${Math.round((t.idleCapSecs || 300) / 60)} 分钟的间隔算空闲、不计入。
+      「等模型」是工具返回之后到下一次调用的等待，「跑工具」是发起调用到结果返回。
+      「工具自报耗时」是每个工具自己上报的 durationMs 之和，比「跑工具」小一点——
+      差额是调度开销。这份会话有 ${span(active)} 花在真实请求上，
+      另有 ${span(idle)} 是隔夜的空档。</p>
+  </div>
+  <div class="card"><h2>工具耗时
+      <span class="muted" style="text-transform:none;letter-spacing:0">按自报 durationMs 排序</span></h2>
+    <table><thead><tr><th>工具</th><th>调用</th><th>合计耗时</th><th>中位</th><th>最慢</th><th>每秒产出字符</th></tr></thead>
+    <tbody>${toolRows || '<tr><td class="muted">没有带耗时的工具结果</td></tr>'}</tbody></table>
+    <p class="hint">「每秒产出字符」是判断工具效率的尺子：同样跑一分钟，一个返回 3 万字符的
+      工具和一个返回 300 字符的工具，价值完全不同。</p>
+  </div>
+  <div class="card"><h2>输出构成
+      <span class="muted" style="text-transform:none;letter-spacing:0">${num(o.total || 0)} 字符，全部由模型生成</span></h2>
+    <div class="ov-hero" style="grid-template-columns:repeat(3,minmax(0,1fr))">
+      <div><div class="k">推理</div><div class="v">${pct(o.thinkingShare)}</div>
+        <div class="sub">${num(o.thinking || 0)} 字符 · ${num(o.callsWithThinking || 0)}/${num(o.calls || 0)} 次调用有推理</div></div>
+      <div><div class="k">正文</div><div class="v">${pct(o.textShare)}</div>
+        <div class="sub">${num(o.text || 0)} 字符</div></div>
+      <div><div class="k">工具参数</div><div class="v">${pct(o.toolArgsShare)}</div>
+        <div class="sub">${num(o.toolArgs || 0)} 字符</div></div>
+    </div>
+    <p class="hint">usage 只报一个 output 总数。把它拆开才看得出：推理占了
+      ${pct(o.thinkingShare)}，正文只占 ${pct(o.textShare)}——想压缩生成量，
+      该动的是推理长度，不是让答案更短。</p>
+  </div>
+  <div class="card"><h2>最贵的条目
+      <span class="muted" style="text-transform:none;letter-spacing:0">字符 × 在上下文中存活的调用次数</span></h2>
+    <table><thead><tr><th class="l">类型</th><th>字符</th><th>存活调用</th><th>累计占用</th><th class="l">时间</th></tr></thead>
+    <tbody>${bigRows || '<tr><td class="muted">无</td></tr>'}</tbody></table>
+    <p class="hint">一张 40 万字符的工具结果如果立刻被压缩掉，只花了一次调用；同样大小
+      但一直留在上下文里，就会在下一次压缩前被重发几百次。字符数本身看不出这个差别，
+      所以这里按「字符 × 存活调用次数」排序——它才是真正被重复付费的量。</p>
+  </div>`;
+}
+
+/// The subagent roster: one row per child session, biggest spend first.
+///
+/// This is the shape delegation actually took. 88 children in p8, and the top
+/// one spent 92.5M prompt tokens -- 4.9% of everything the whole session sent.
+/// The aggregate "subagents are 12% of prompt" hides that it is one or two
+/// children doing it, not a broad tail.
+function childrenCard(d) {
+  const rows = d.children || [];
+  if (!rows.length) return "";
+  const total = rows.reduce((sum, x) => sum + x.prompt, 0);
+  const totalOut = rows.reduce((sum, x) => sum + x.output, 0);
+  const top = rows.slice(0, 25);
+  const byOrigin = {};
+  rows.forEach((x) => {
+    const slot = byOrigin[x.origin] || (byOrigin[x.origin] = { n: 0, prompt: 0, output: 0 });
+    slot.n += 1; slot.prompt += x.prompt; slot.output += x.output;
+  });
+  const originRows = Object.entries(byOrigin).sort((a, b) => b[1].prompt - a[1].prompt)
+    .map(([origin, x]) => `<tr>
+      <td class="mono">${esc(origin)}</td>
+      <td>${num(x.n)}</td>
+      <td>${num(x.prompt)}</td>
+      <td>${pct(x.prompt / Math.max(1, total))}</td>
+      <td>${num(x.output)}</td>
+      <td>${num(Math.round(x.prompt / Math.max(1, x.n)))}</td></tr>`).join("");
+  const rowHTML = top.map((x) => `<tr>
+      <td class="mono">${esc(x.target)}</td>
+      <td class="mono">${esc(x.origin)}</td>
+      <td>${num(x.prompt)}</td>
+      <td>${pct(x.prompt / Math.max(1, total))}</td>
+      <td>${num(x.output)}</td>
+      <td>${dur(Math.max(0, x.lastAt - x.firstAt))}</td>
+      <td>${num(x.rows)}</td></tr>`).join("");
+  // Spend concentration: how much of the total the top few children hold.
+  const sorted = rows.map((x) => x.prompt).sort((a, b) => b - a);
+  const topN = (n) => sorted.slice(0, n).reduce((a, b) => a + b, 0) / Math.max(1, total);
+  return `<div class="card"><h2>子代理名册
+      <span class="muted" style="text-transform:none;letter-spacing:0">${num(rows.length)} 个子会话 · ${num(total)} prompt</span></h2>
+    <div class="ov-hero" style="grid-template-columns:repeat(3,minmax(0,1fr))">
+      <div><div class="k">最贵的 1 个</div><div class="v">${pct(topN(1))}</div>
+        <div class="sub">占子代理总量 · ${num(sorted[0] || 0)} tokens</div></div>
+      <div><div class="k">前 5 个</div><div class="v">${pct(topN(5))}</div>
+        <div class="sub">占子代理总量 · ${num(sorted.slice(0, 5).reduce((a, b) => a + b, 0))} tokens</div></div>
+      <div><div class="k">平均每个</div><div class="v">${num(Math.round(total / rows.length))}</div>
+        <div class="sub">tokens · 生成合计 ${num(totalOut)}</div></div>
+    </div>
+    <table style="margin-top:14px"><thead><tr>
+      <th class="mono l">来源</th><th>子会话</th><th>prompt</th>
+      <th title="占所有子代理 prompt 的比例">占子代理</th><th>生成</th><th>平均每个</th>
+    </tr></thead><tbody>${originRows}</tbody></table>
+    <table style="margin-top:18px"><thead><tr>
+      <th class="l">目标 id</th><th class="l">来源</th><th>prompt</th>
+      <th title="占所有子代理 prompt 的比例">占子代理</th><th>生成</th><th>存活</th><th>记账行</th>
+    </tr></thead><tbody>${rowHTML}</tbody></table>
+    <p class="hint">按子会话去重的最终累计值，最大 ${Math.min(25, rows.length)} 个。
+      「存活」是它第一次和最后一次上报用量的时间差，近似它跑了多久。
+      <code>targetId</code> 是运行时会话 id，和子会话自己的 session id 不是同一套编号，
+      所以这里拿不到名字——名册只回答「花了多少、跑了多久」。<br>
+      每个子会话的累计值取自 <code>aggregateUsage</code> 的各分项；同一行的
+      <code>totalTokens</code> 冻结在它第一次调用时（一个后来花了 9,247 万的子会话至今仍报 12 万）。</p>
+  </div>`;
+}
+
+/// Every failure in one place: provider retries, empty model replies, failed
+/// compactions, dead children, and failed tool calls.
+function failureCard(d) {
+  const f = d.failures || {};
+  const retries = (f.retries || []).filter((x) => !x.success);
+  const children = f.childFailureRows || [];
+  const toolRows = (f.toolErrorsByTool || []).map((x) =>
+    `<tr><td class="mono">${esc(x.tool)}</td><td>${num(x.errors)}</td></tr>`).join("");
+  // Text columns need `class="l"`: every unstyled cell is right-aligned for
+  // numbers, which pushed the error text to the far edge of the table.
+  const retryRows = retries.slice(0, 12).map((x) => `<tr>
+      <td class="l muted mono">${when(x.at)}</td>
+      <td>${num(x.attempts)}</td>
+      <td class="l mono" style="font-size:11.5px">${esc(x.error || "—")}</td></tr>`).join("");
+  const childRows = children.slice(0, 12).map((x) => `<tr>
+      <td class="l muted mono">${when(x.at)}</td>
+      <td class="l mono">${esc(x.name || "—")}</td>
+      <td class="l mono" style="font-size:11.5px">${esc(x.error)}</td></tr>`).join("");
+  const nothing = !f.providerRetries && !f.emptyReplies && !f.childFailures
+    && !f.toolErrors && !f.compactionFailed;
+  if (nothing) {
+    return `<div class="card"><h2>失败账</h2><p class="muted">这个会话没有记录到失败。</p></div>`;
+  }
+  return `<div class="card"><h2>失败账
+      <span class="muted" style="text-transform:none;letter-spacing:0">全会话汇总</span></h2>
+    <div class="ov-hero" style="grid-template-columns:repeat(5,minmax(0,1fr))">
+      <div><div class="k">重试</div><div class="v">${num(f.providerRetries || 0)}</div>
+        <div class="sub">${num(f.providerRetryFailed || 0)} 次最终失败 · 最多 ${num(f.attemptsMax || 0)} 次尝试</div></div>
+      <div><div class="k">空回复</div><div class="v">${num(f.emptyReplies || 0)}</div>
+        <div class="sub">模型返回既无文字也无调用</div></div>
+      <div><div class="k">工具失败</div><div class="v">${num(f.toolErrors || 0)}</div>
+        <div class="sub">含 kernel 卡死与命令不存在</div></div>
+      <div><div class="k">子会话失败</div><div class="v">${num(f.childFailures || 0)}</div>
+        <div class="sub">worker 失联为主要原因</div></div>
+      <div><div class="k">压缩失败</div><div class="v">${num(f.compactionFailed || 0)}</div>
+        <div class="sub">压不下去，上下文会持续涨</div></div>
+    </div>
+    ${retryRows ? `<table style="margin-top:14px"><thead><tr>
+      <th class="l">时间</th><th>尝试</th><th class="l">最终错误</th></tr></thead>
+      <tbody>${retryRows}</tbody></table>
+      <p class="hint">provider 重试的最终失败记录，「尝试」是重试次数。
+        <code>attempts=0</code> 表示第一次就被拒（如 400），重试没有意义。</p>` : ""}
+    ${childRows ? `<table style="margin-top:14px"><thead><tr>
+      <th class="l">时间</th><th class="mono">子会话</th><th class="l">原因</th></tr></thead>
+      <tbody>${childRows}</tbody></table>` : ""}
+    ${toolRows ? `<table style="margin-top:14px;max-width:420px"><thead><tr>
+      <th>工具</th><th>失败次数</th></tr></thead><tbody>${toolRows}</tbody></table>` : ""}
+    <p class="hint">这些记录散在六种 <code>custom_message</code> 类型里，在别的任何视图里都看不见：
+      一个重试失败了 27 次、空回复 39 次的会话，只看用量会显得完全健康。</p>
+  </div>`;
+}
+
 /// Per-model usage and cache behaviour. A session that switched providers
 /// mid-run has a misleading single number until this is split.
 function usageCard(d) {
@@ -894,31 +1113,22 @@ function dailyCard(d) {
 /// Ledger entries: goals, refinements, commits, subagents. None of it reaches
 /// the model — it is the record of what the session did, kept in the same file.
 function harnessCard(d) {
-  const h = d.harness || { custom: [], git: [], origins: [] };
-  const customRows = (h.custom || []).map((c) =>
-    `<tr><td class="mono">${esc(c.type)}</td><td>${num(c.count)}</td></tr>`).join("");
-  const originTotal = (h.origins || []).reduce((sum, o) => sum + o.tokens, 0);
-  const originRows = (h.origins || []).map((o) =>
-    `<tr><td class="mono">${esc(o.origin)}</td><td>${num(o.children)}</td><td>${num(o.tokens)}</td>
-      <td>${originTotal ? pct(o.tokens / originTotal) : "—"}</td><td>${num(o.output || 0)}</td></tr>`).join("");
-  return `<div class="card"><h2>子代理开销
-      <span class="muted" style="text-transform:none;letter-spacing:0">${num(h.children || 0)} 个子会话 · ${num(h.childPrompt || 0)} tokens</span></h2>
-    <table><thead><tr><th>来源</th><th>子会话</th><th>prompt</th><th>占比</th><th>生成</th></tr></thead>
-    <tbody>${originRows || '<tr><td class="muted">无</td></tr>'}</tbody></table>
-    <p class="hint">按子会话去重后的累计 prompt。「来源」是子会话被谁拉起来的：
-      <code>spawn_task</code> 是显式派发，<code>agent_message</code> 是被消息唤醒，
-      <code>direct_user</code> 是用户直接开的会话。<br>
-      每个子会话的累计值取自它最后一行 <code>aggregateUsage</code> 的各分项——
-      同一行的 <code>totalTokens</code> 字段冻结在子会话第一次调用时（一个后来花了 9,300 万
-      的子会话至今仍报 12 万），不能直接用。</p>
-  </div>
-  <div class="card"><h2>自定义类型
-      <span class="muted" style="text-transform:none;letter-spacing:0">账本记录，从不进入上下文</span></h2>
-    <table><thead><tr><th>类型</th><th>条数</th></tr></thead>
-    <tbody>${customRows || '<tr><td class="muted">无</td></tr>'}</tbody></table>
-    <p class="hint"><code>thread_goal_state</code> 是目标状态快照，几乎每轮都会写一份；
-      <code>refinement</code> 是每次自我改进的记录。它们占了条目数的一成多，
-      但不占一个 token 的上下文。改进记录在「改进记录」页，git 快照在「提交」页。</p>
+  const h = d.harness || { custom: [] };
+  const custom = h.custom || [];
+  const total = custom.reduce((sum, c) => sum + c.count, 0);
+  const rows = custom.map((c) => `<tr><td class="mono">${esc(c.type)}</td>
+      <td>${num(c.count)}</td>
+      <td>${pct(c.count / Math.max(1, total))}</td></tr>`).join("");
+  return `<div class="card"><h2>记录类型
+      <span class="muted" style="text-transform:none;letter-spacing:0">${num(custom.length)} 种 · ${num(total)} 条 · 从不进入上下文</span></h2>
+    <table><thead><tr><th>类型</th><th>条数</th><th>占全部记录</th></tr></thead>
+    <tbody>${rows || '<tr><td class="muted">无</td></tr>'}</tbody></table>
+    <p class="hint"><code>custom/</code> 前缀是 <code>type: "custom"</code> 的记录，无前缀的是
+      <code>type: "custom_message"</code>——两族都是账本，此前只统计了前者，19 种类型里只显示 1 种。<br>
+      这些是账本记录：目标状态快照、子会话用量、改进记录、git 快照。
+      它们占了条目数的一成多，但不占一个 token 的上下文——<code>thread_goal_state</code>
+      几乎每轮都会写一份完整的快照，是条目数被高估的主要原因。<br>
+      子会话的开销在「子代理」页，改进记录在「改进记录」页，git 快照在「提交」页。</p>
   </div>`;
 }
 

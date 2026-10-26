@@ -232,6 +232,12 @@ pub fn detail(session: &Session, leaf_id: Option<&str>) -> Value {
         "accuracy": accuracy,
         "notices": notices,
         "entryKinds": entry_kinds(session, &leaf),
+        "time": time_split(session, &leaf),
+        "toolTime": tool_time(session, &leaf),
+        "biggest": biggest(session, &leaf, 40),
+        "output": output_split(session, &leaf),
+        "children": child_roster(session, &leaf),
+        "failures": failure_log(session, &leaf),
     })
 }
 
@@ -374,7 +380,7 @@ fn tool_stats(session: &Session, leaf: &str) -> Vec<Value> {
     let mut rows: std::collections::HashMap<String, Row> = std::collections::HashMap::new();
     for index in session.branch(leaf) {
         let Kind::ToolResult {
-            chars, tool, is_error,
+            chars, tool, is_error, ..
         } = &session.entries[index].kind
         else {
             continue;
@@ -420,6 +426,498 @@ fn tool_stats(session: &Session, leaf: &str) -> Vec<Value> {
     out
 }
 
+/// One row per subagent session: what it cost and how long it lived.
+///
+/// `child_usage_attributed` names its target by runtime id, which is not the
+/// child's session id and cannot be resolved to a name from this file. What it
+/// does carry is trustworthy: the *parts* of `aggregateUsage` are a running
+/// total (the `totalTokens` beside them is frozen at the child's first call),
+/// so the last row per target is that child's final spend.
+fn child_roster(session: &Session, leaf: &str) -> Vec<Value> {
+    struct Row {
+        prompt: u64,
+        output: u64,
+        origin: String,
+        first: i64,
+        last: i64,
+        rows: u64,
+    }
+    let mut rows: std::collections::HashMap<String, Row> = std::collections::HashMap::new();
+    for index in session.branch(leaf) {
+        let Kind::ChildUsage {
+            target,
+            origin,
+            prompt,
+            output,
+        } = &session.entries[index].kind
+        else {
+            continue;
+        };
+        let at = session.entries[index].at;
+        let row = rows.entry(target.clone()).or_insert_with(|| Row {
+            prompt: 0,
+            output: 0,
+            origin: origin.clone(),
+            first: at,
+            last: at,
+            rows: 0,
+        });
+        // The running total only grows, so the latest row wins; taking the max
+        // also survives a session file that was resumed with a reset counter.
+        row.prompt = row.prompt.max(*prompt);
+        row.output = row.output.max(*output);
+        row.first = row.first.min(at);
+        row.last = row.last.max(at);
+        row.rows += 1;
+    }
+    let mut out: Vec<Value> = rows
+        .into_iter()
+        .map(|(target, row)| {
+            json!({
+                "target": target,
+                "origin": row.origin,
+                "prompt": row.prompt,
+                "output": row.output,
+                "firstAt": row.first,
+                "lastAt": row.last,
+                "rows": row.rows,
+            })
+        })
+        .collect();
+    out.sort_by(|a, b| {
+        b["prompt"]
+            .as_u64()
+            .unwrap_or_default()
+            .cmp(&a["prompt"].as_u64().unwrap_or_default())
+    });
+    out
+}
+
+/// Everything that went wrong, in one place.
+///
+/// These records are scattered across six custom types and none of them is
+/// visible in any other view; a session with 39 empty model replies and 27
+/// failed retries otherwise looks perfectly healthy.
+fn failure_log(session: &Session, leaf: &str) -> Value {
+    let mut retries: Vec<Value> = Vec::new();
+    let mut retry_failed = 0_u64;
+    let mut attempts_max = 0_u64;
+    let mut empty_replies = 0_u64;
+    let mut compaction_failed = 0_u64;
+    let mut child_failures: Vec<Value> = Vec::new();
+    let mut tool_errors: std::collections::HashMap<String, u64> = std::collections::HashMap::new();
+    let mut tool_errors_total = 0_u64;
+    for index in session.branch(leaf) {
+        let entry = &session.entries[index];
+        if let Kind::ToolResult {
+            tool, is_error, chars, ..
+        } = &entry.kind
+        {
+            if *is_error {
+                tool_errors_total += 1;
+                *tool_errors.entry(tool.clone()).or_insert(0) += 1;
+                let _ = chars;
+            }
+            continue;
+        }
+        let Kind::CustomMessage {
+            custom_type,
+            detail,
+            ..
+        } = &entry.kind
+        else {
+            continue;
+        };
+        let detail = detail.as_deref();
+        let field_u64 = |key: &str| {
+            detail
+                .and_then(|value| value.get(key))
+                .and_then(Value::as_u64)
+                .unwrap_or_default()
+        };
+        match custom_type.as_str() {
+            "provider_retry_outcome" => {
+                let attempts = field_u64("attempts");
+                let success = detail
+                    .and_then(|value| value.get("success"))
+                    .and_then(Value::as_bool)
+                    .unwrap_or(false);
+                attempts_max = attempts_max.max(attempts);
+                if !success {
+                    retry_failed += 1;
+                }
+                let error = detail
+                    .and_then(|value| value.get("finalError"))
+                    .and_then(Value::as_str)
+                    .unwrap_or("")
+                    .lines()
+                    .next()
+                    .unwrap_or("")
+                    .chars()
+                    .take(120)
+                    .collect::<String>();
+                retries.push(json!({
+                    "at": entry.at,
+                    "attempts": attempts,
+                    "success": success,
+                    "error": error,
+                }));
+            }
+            "model_prompt_error" => empty_replies += 1,
+            "compaction_outcome" => {
+                let failed = detail
+                    .and_then(|value| value.get("outcome"))
+                    .and_then(Value::as_str)
+                    .map(|text| text != "ok" && text != "success")
+                    .unwrap_or(false);
+                if failed {
+                    compaction_failed += 1;
+                }
+            }
+            "rlm_child_failure" => {
+                child_failures.push(json!({
+                    "at": entry.at,
+                    "error": detail
+                        .and_then(|value| value.get("error"))
+                        .and_then(Value::as_str)
+                        .unwrap_or("")
+                        .chars()
+                        .take(160)
+                        .collect::<String>(),
+                    "name": detail
+                        .and_then(|value| value.get("sessionName"))
+                        .and_then(Value::as_str)
+                        .unwrap_or(""),
+                }));
+            }
+            _ => {}
+        }
+    }
+    let mut tools: Vec<Value> = tool_errors
+        .into_iter()
+        .map(|(tool, count)| json!({ "tool": tool, "errors": count }))
+        .collect();
+    tools.sort_by(|a, b| {
+        b["errors"]
+            .as_u64()
+            .unwrap_or_default()
+            .cmp(&a["errors"].as_u64().unwrap_or_default())
+    });
+    retries.sort_by_key(|row| std::cmp::Reverse(row["at"].as_i64().unwrap_or_default()));
+    child_failures.sort_by_key(|row| std::cmp::Reverse(row["at"].as_i64().unwrap_or_default()));
+    json!({
+        "providerRetries": retries.len(),
+        "providerRetryFailed": retry_failed,
+        "attemptsMax": attempts_max,
+        "retries": retries.into_iter().take(20).collect::<Vec<_>>(),
+        "emptyReplies": empty_replies,
+        "compactionFailed": compaction_failed,
+        "childFailures": child_failures.len(),
+        "childFailureRows": child_failures.into_iter().take(20).collect::<Vec<_>>(),
+        "toolErrors": tool_errors_total,
+        "toolErrorsByTool": tools,
+    })
+}
+
+/// Where the wall clock went.
+///
+/// The session file timestamps every record, so the difference between two
+/// consecutive records is time the session spent between them. Two rules make
+/// that usable:
+///
+/// * only transcript records count (user / assistant / tool results); the
+///   ledger records -- goal snapshots, child-usage batches, refinement
+///   notices -- are written in bursts and would otherwise own 44% of the
+///   clock, which is an artefact of logging, not of work;
+/// * a gap over five minutes is idle, not waiting. The session spans 17 days
+///   and the median gap is 3.4 s; capping keeps a single overnight pause from
+///   defining the total.
+///
+/// The result separates the two things that dominate: waiting on the provider
+/// (tool result -> next assistant call) and running tools (assistant call ->
+/// tool result). Everything else is the human reading the answer.
+fn time_split(session: &Session, leaf: &str) -> Value {
+    const IDLE_CAP_SECS: f64 = 300.0;
+    let path = session.branch(leaf);
+    let mut model = 0.0_f64;
+    let mut tool = 0.0_f64;
+    let mut model_gaps: Vec<f64> = Vec::new();
+    let mut tool_gaps: Vec<f64> = Vec::new();
+    // Tool results carry their own measured duration; wall clock is not it.
+    let mut measured_ms: u64 = 0;
+    let mut measured_n: u64 = 0;
+    for &index in &path {
+        if let Kind::ToolResult {
+            duration_ms: Some(ms),
+            ..
+        } = &session.entries[index].kind
+        {
+            measured_ms += ms;
+            measured_n += 1;
+        }
+    }
+    // Transcript records only, in order.
+    let mut points: Vec<(i64, bool)> = Vec::new();
+    for &index in &path {
+        let entry = &session.entries[index];
+        match &entry.kind {
+            Kind::User { .. } => points.push((entry.at, false)),
+            Kind::Assistant { .. } => points.push((entry.at, true)),
+            Kind::ToolResult { .. } => points.push((entry.at, false)),
+            _ => {}
+        }
+    }
+    let mut active = 0.0_f64;
+    let mut idle_total = 0.0_f64;
+    for pair in points.windows(2) {
+        let (from, to) = (pair[0], pair[1]);
+        if from.0 <= 0 || to.0 <= 0 || to.0 < from.0 {
+            continue;
+        }
+        #[allow(clippy::cast_precision_loss)]
+        let secs = (to.0 - from.0) as f64 / 1000.0;
+        if secs > IDLE_CAP_SECS {
+            idle_total += secs;
+            continue;
+        }
+        active += secs;
+        if to.1 {
+            model += secs;
+            model_gaps.push(secs);
+        } else {
+            tool += secs;
+            tool_gaps.push(secs);
+        }
+    }
+    let quantile = |values: &mut Vec<f64>, q: f64| -> f64 {
+        if values.is_empty() {
+            return 0.0;
+        }
+        values.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+        #[allow(clippy::cast_precision_loss, clippy::cast_sign_loss, clippy::cast_possible_truncation)]
+        let at = ((values.len() - 1) as f64 * q).round() as usize;
+        values[at]
+    };
+    let model_median = quantile(&mut model_gaps, 0.5);
+    let tool_median = quantile(&mut tool_gaps, 0.5);
+    let model_p90 = quantile(&mut model_gaps, 0.9);
+    let tool_p90 = quantile(&mut tool_gaps, 0.9);
+    #[allow(clippy::cast_precision_loss)]
+    let measured_hours = measured_ms as f64 / 3_600_000.0;
+    json!({
+        "activeSecs": active,
+        "modelSecs": model,
+        "toolSecs": tool,
+        // Transcript records are only three kinds, so every counted gap is
+        // either waiting on the model or running a tool. Time between user
+        // messages and the answer is model time; there is no third bucket,
+        // and inventing one reported a hard zero on every session.
+        "idleSecs": (idle_total).max(0.0),
+        "modelCalls": model_gaps.len(),
+        "toolCalls": tool_gaps.len(),
+        "modelMedian": model_median,
+        "modelP90": model_p90,
+        "toolMedian": tool_median,
+        "toolP90": tool_p90,
+        "measuredToolSecs": measured_hours * 3600.0,
+        "measuredToolCalls": measured_n,
+        "idleCapSecs": IDLE_CAP_SECS,
+    })
+}
+
+/// Per-tool wall time, from each tool result's own `durationMs`.
+///
+/// `tool_stats` counts what tools *emitted*; this counts what they *took*.
+/// A tool that is cheap in output and expensive in time is invisible in every
+/// other view: it inflates nothing, it just makes the session slow.
+fn tool_time(session: &Session, leaf: &str) -> Vec<Value> {
+    struct Row {
+        calls: u64,
+        total_ms: u64,
+        max_ms: u64,
+        durations: Vec<u64>,
+        chars: u64,
+    }
+    let mut rows: std::collections::HashMap<String, Row> = std::collections::HashMap::new();
+    for index in session.branch(leaf) {
+        let Kind::ToolResult {
+            tool,
+            chars,
+            duration_ms,
+            ..
+        } = &session.entries[index].kind
+        else {
+            continue;
+        };
+        let Some(ms) = duration_ms else { continue };
+        let row = rows.entry(tool.clone()).or_insert_with(|| Row {
+            calls: 0,
+            total_ms: 0,
+            max_ms: 0,
+            durations: Vec::new(),
+            chars: 0,
+        });
+        row.calls += 1;
+        row.total_ms += ms;
+        row.max_ms = row.max_ms.max(*ms);
+        row.durations.push(*ms);
+        row.chars += chars.total();
+    }
+    let mut out: Vec<Value> = rows
+        .into_iter()
+        .map(|(tool, mut row)| {
+            row.durations.sort_unstable();
+            let n = row.durations.len();
+            let median = row.durations[n / 2];
+            #[allow(clippy::cast_precision_loss)]
+            let seconds = row.total_ms as f64 / 1000.0;
+            json!({
+                "tool": tool,
+                "calls": row.calls,
+                "seconds": seconds,
+                "medianMs": median,
+                "maxMs": row.max_ms,
+                "chars": row.chars,
+                "charsPerSecond": if seconds > 0.0 {
+                    #[allow(clippy::cast_precision_loss)]
+                    { row.chars as f64 / seconds }
+                } else { 0.0 },
+            })
+        })
+        .collect();
+    out.sort_by(|a, b| {
+        b["seconds"]
+            .as_f64()
+            .unwrap_or_default()
+            .partial_cmp(&a["seconds"].as_f64().unwrap_or_default())
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
+    out
+}
+
+/// The biggest single rows on the branch, with their cost in the currency that
+/// matters: characters, and how many model calls they stayed in context for.
+///
+/// A 400 KB tool result that is compacted away immediately costs one call; the
+/// same result kept for 300 calls costs 300x. Characters alone cannot tell
+/// those apart, which is why the raw "largest entries" list misleads.
+fn biggest(session: &Session, leaf: &str, limit: usize) -> Vec<Value> {
+    let path = session.branch(leaf);
+    let position: std::collections::HashMap<&str, usize> = path
+        .iter()
+        .enumerate()
+        .map(|(at, &index)| (session.entries[index].id.as_str(), at))
+        .collect();
+    // For each path position, the position at which it leaves the context
+    // (the next compaction's cut, or the leaf).
+    let mut evicted_at = vec![path.len(); path.len()];
+    let mut tail_start = 0;
+    for (at, &index) in path.iter().enumerate() {
+        if let Kind::Compaction { first_kept, .. } = &session.entries[index].kind {
+            if let Some(&cut) = position.get(first_kept.as_str()) {
+                for slot in evicted_at.iter_mut().take(cut).skip(tail_start) {
+                    *slot = at;
+                }
+                tail_start = cut;
+            }
+        }
+    }
+    // Calls remaining from a position onward, so the live span is a subtraction.
+    let mut calls_after = vec![0_u64; path.len() + 1];
+    for at in (0..path.len()).rev() {
+        let calls = matches!(session.entries[path[at]].kind, Kind::Assistant { usage: Some(_), .. });
+        calls_after[at] = calls_after[at + 1] + u64::from(calls);
+    }
+    let mut scored: Vec<(u64, usize, u64, &'static str)> = Vec::new();
+    for (at, &index) in path.iter().enumerate() {
+        let entry = &session.entries[index];
+        let chars = entry.chars().total();
+        if chars < 1000 {
+            continue;
+        }
+        let end = evicted_at[at];
+        let live = calls_after[at + 1].saturating_sub(calls_after[end]);
+        let label = match &entry.kind {
+            Kind::User { .. } => "user",
+            Kind::Assistant { .. } => "assistant",
+            Kind::ToolResult { .. } => "toolResult",
+            Kind::Compaction { .. } => "compaction",
+            _ => continue,
+        };
+        scored.push((chars.saturating_mul(live.max(1)), at, chars, label));
+    }
+    scored.sort_by_key(|row| std::cmp::Reverse(row.0));
+    scored
+        .into_iter()
+        .take(limit)
+        .map(|(cost, at, chars, label)| {
+            let index = path[at];
+            let entry = &session.entries[index];
+            let end = evicted_at[at];
+            json!({
+                "entry": index,
+                "at": entry.at,
+                "kind": label,
+                "chars": chars,
+                "calls": calls_after[at + 1].saturating_sub(calls_after[end]),
+                "cost": cost,
+                "tool": match &entry.kind {
+                    Kind::ToolResult { tool, .. } => tool.clone(),
+                    _ => String::new(),
+                },
+            })
+        })
+        .collect()
+}
+
+/// What the output tokens were spent on.
+///
+/// `cache.output` is one number, but an assistant call emits three different
+/// things and they are not interchangeable: reasoning, prose, and tool call
+/// arguments. In p8 reasoning is 61% of everything the model wrote -- a fact
+/// no usage table shows, because usage only reports a total.
+fn output_split(session: &Session, leaf: &str) -> Value {
+    let mut thinking = 0_u64;
+    let mut text = 0_u64;
+    let mut tool_args = 0_u64;
+    let mut calls = 0_u64;
+    let mut calls_with_thinking = 0_u64;
+    for index in session.branch(leaf) {
+        let Kind::Assistant { output, .. } = &session.entries[index].kind else {
+            continue;
+        };
+        thinking += output.thinking;
+        text += output.text;
+        tool_args += output.tool_args;
+        calls += 1;
+        if output.thinking > 0 {
+            calls_with_thinking += 1;
+        }
+    }
+    let total = thinking + text + tool_args;
+    let share = |part: u64| {
+        if total == 0 {
+            0.0
+        } else {
+            #[allow(clippy::cast_precision_loss)]
+            {
+                part as f64 / total as f64
+            }
+        }
+    };
+    json!({
+        "thinking": thinking,
+        "text": text,
+        "toolArgs": tool_args,
+        "total": total,
+        "thinkingShare": share(thinking),
+        "textShare": share(text),
+        "toolArgsShare": share(tool_args),
+        "calls": calls,
+        "callsWithThinking": calls_with_thinking,
+    })
+}
+
 /// Harness bookkeeping entries: goal snapshots, refinements, git commits, and
 /// what subagents spent. None of it is transcript — it never reaches the model
 /// — but it is the record of what the session did.
@@ -441,8 +939,21 @@ fn harness_stats(session: &Session, leaf: &str) -> Value {
     for index in session.branch(leaf) {
         let entry = &session.entries[index];
         match &entry.kind {
+            // Two record families hold the ledger: `type: "custom"` and
+            // `type: "custom_message"`. Counting only the first reported one
+            // type for a session that has nineteen -- the page exists to show
+            // the other eighteen.
             Kind::Custom { custom_type, .. } => {
+                *custom.entry(format!("custom/{custom_type}")).or_insert(0) += 1;
+            }
+            Kind::CustomMessage { custom_type, .. } => {
                 *custom.entry(custom_type.clone()).or_insert(0) += 1;
+            }
+            Kind::Refinement { .. } => {
+                *custom.entry("prime-agent.refinement".to_string()).or_insert(0) += 1;
+            }
+            Kind::GitState { .. } => {
+                *custom.entry("git_state".to_string()).or_insert(0) += 1;
             }
             Kind::ChildUsage {
                 target,
@@ -765,7 +1276,7 @@ pub fn transcript(session: &Session, leaf: &str, offset: usize, limit: usize) ->
                     let (tokens, _) = crate::token_est::estimate(*summary_chars);
                     (Some(format!("{} before", tokens_before)), tokens)
                 }
-                Kind::CustomMessage { custom_type, chars } => {
+                Kind::CustomMessage { custom_type, chars, .. } => {
                     let (tokens, _) = crate::token_est::estimate(*chars);
                     (Some(custom_type.clone()), tokens)
                 }
@@ -1067,6 +1578,35 @@ mod tests {
         assert_eq!(cpt["silent"], 1, "u2 was superseded before any call");
         assert_eq!(cpt["n"], 2);
         assert_eq!(cpt["max"], 2, "the first turn made two calls");
+    }
+
+    /// The time split must separate waiting on the provider from running tools,
+    /// and must not let a long idle gap or a ledger record into either bucket.
+    #[test]
+    fn time_split_separates_model_from_tool_and_drops_idle() {
+        let (_dir, path) = write_session(&[
+            r#"{"type":"session","id":"s1","timestamp":"2026-01-01T00:00:00.000Z","cwd":"/tmp"}"#,
+            r#"{"type":"message","id":"u1","parentId":"s1","timestamp":"2026-01-01T00:00:00.000Z","message":{"role":"user","content":"a"}}"#,
+            // 10 s to the first call: model time.
+            r#"{"type":"message","id":"a1","parentId":"u1","timestamp":"2026-01-01T00:00:10.000Z","message":{"role":"assistant","content":[{"type":"text","text":"x"}],"usage":{"input":10,"output":1,"cacheRead":0,"cacheWrite":0,"totalTokens":11}}}"#,
+            // 2 s to the tool result: tool time, and the tool reports 500 ms.
+            r#"{"type":"message","id":"t1","parentId":"a1","timestamp":"2026-01-01T00:00:12.000Z","message":{"role":"toolResult","toolName":"bash","content":[{"type":"text","text":"ok"}],"details":{"durationMs":500}}}"#,
+            // 8 s to the next call: model time.
+            r#"{"type":"message","id":"a2","parentId":"t1","timestamp":"2026-01-01T00:00:20.000Z","message":{"role":"assistant","content":[{"type":"text","text":"y"}],"usage":{"input":10,"output":1,"cacheRead":0,"cacheWrite":0,"totalTokens":11}}}"#,
+            // An hour later: idle, and must not be counted anywhere.
+            r#"{"type":"message","id":"a3","parentId":"a2","timestamp":"2026-01-01T01:00:20.000Z","message":{"role":"assistant","content":[{"type":"text","text":"z"}],"usage":{"input":10,"output":1,"cacheRead":0,"cacheWrite":0,"totalTokens":11}}}"#,
+        ]);
+        let session = crate::session::load(&path).expect("load");
+        let payload = detail(&session, None);
+        let time = &payload["time"];
+        assert_eq!(time["modelSecs"], 18.0, "10s + 8s of provider waiting");
+        assert_eq!(time["toolSecs"], 2.0, "call to tool result");
+        assert_eq!(time["activeSecs"], 20.0);
+        assert_eq!(time["idleSecs"], 3600.0, "the hour-long pause");
+        assert_eq!(time["measuredToolSecs"], 0.5, "the tool's own durationMs");
+        // Tool time is wall time, measured time is the tool's own claim; the
+        // two are different numbers and must stay different.
+        assert_eq!(payload["toolTime"][0]["seconds"], 0.5);
     }
 
 }
