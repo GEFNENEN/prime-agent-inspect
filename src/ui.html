@@ -52,6 +52,10 @@ th,td{text-align:right;padding:5px 8px;font-size:12px;border-bottom:1px solid va
 th:first-child,td:first-child{text-align:left}
 th{color:var(--dim);font-weight:500;font-size:11px;text-transform:uppercase;letter-spacing:.04em}
 tbody tr:hover{background:var(--panel2)}
+/* The chart's hovered point and its table row are the same compaction; the row
+   has to be findable at a glance in a 200-row tail. */
+tbody tr.hot{background:rgba(139,127,212,.18)}
+tbody tr.hot td:first-child{color:var(--fg)}
 .bar{height:8px;border-radius:4px;background:var(--panel2);overflow:hidden;display:flex}
 .bar span{height:100%}
 .legend{display:flex;flex-wrap:wrap;gap:6px 14px;margin-top:10px;font-size:12px}
@@ -67,6 +71,7 @@ tbody tr:hover{background:var(--panel2)}
 #status{padding:6px 20px;font-size:12px;color:var(--dim);border-bottom:1px solid var(--line)}
 #status.err{color:var(--bad)}
 canvas{width:100%;height:auto;display:block}
+#chart{cursor:crosshair}
 .hint{color:var(--dim);font-size:12px;margin-top:8px}
 .tlctl{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:10px;
   font-size:12px;color:var(--dim)}
@@ -99,17 +104,20 @@ canvas{width:100%;height:auto;display:block}
   font-variant-numeric:tabular-nums}
 .pie .side .legend .en{width:64px;text-align:right;color:var(--dim);
   font-variant-numeric:tabular-nums;font-size:11px}
-.pietip{position:fixed;z-index:60;display:none;pointer-events:none;
+.tip{position:fixed;z-index:60;display:none;pointer-events:none;
   background:var(--panel2);border:1px solid var(--accent);border-radius:8px;
   padding:8px 10px;font-size:12px;line-height:1.55;min-width:190px;
   box-shadow:0 8px 28px rgba(0,0,0,.5)}
-.pietip .h{display:flex;align-items:center;gap:6px;font-weight:600;margin-bottom:5px}
-.pietip .h i{width:9px;height:9px;border-radius:2px;flex:0 0 auto}
-.pietip .r{display:flex;justify-content:space-between;gap:16px;color:var(--dim)}
-.pietip .r b{color:var(--fg);font-weight:600;font-variant-numeric:tabular-nums}
-.pietip .n{margin-top:5px;padding-top:5px;border-top:1px solid var(--line);
+.tip .h{display:flex;align-items:center;gap:6px;font-weight:600;margin-bottom:5px}
+.tip .h i{width:9px;height:9px;border-radius:2px;flex:0 0 auto}
+.tip .r{display:flex;justify-content:space-between;gap:16px;color:var(--dim)}
+.tip .r b{color:var(--fg);font-weight:600;font-variant-numeric:tabular-nums}
+.tip .n{margin-top:5px;padding-top:5px;border-top:1px solid var(--line);
   color:var(--dim);font-size:11px;max-width:240px}
-.pietip .more{margin-top:6px;color:var(--accent);font-size:11px}
+.tip .more{margin-top:6px;color:var(--accent);font-size:11px}
+.tip .r b.bad{color:var(--bad)}
+.tip .r b.ok{color:var(--ok)}
+.tip hr{border:0;border-top:1px solid var(--line);margin:5px 0}
 /* Content viewer: the tooltip gives numbers, this gives the text behind them. */
 .pie .slice{cursor:pointer}
 .pie .side .legend>span{cursor:pointer}
@@ -175,6 +183,10 @@ const RECENT_KEY = "prime-agent-inspect.recent";
 const state = {
   sessions: [], selected: null, detail: null,
   recent: loadRecent(), shownTotal: 0,
+  // What the timeline is currently drawing, plus which point the pointer is
+  // on. drawChart and the hit test read the same array, so hovering can never
+  // describe a point that is not on screen.
+  chartTimeline: [], chartChecks: new Map(), chartHover: null,
 };
 
 const $ = (id) => document.getElementById(id);
@@ -192,6 +204,13 @@ function when(ms) {
   const d = new Date(ms);
   const pad = (x) => String(x).padStart(2, "0");
   return `${pad(d.getMonth()+1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
+}
+function whenFull(ms) {
+  if (!ms) return "—";
+  const d = new Date(ms);
+  const pad = (x) => String(x).padStart(2, "0");
+  return `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())} `
+    + `${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
 }
 function esc(s) {
   return String(s ?? "").replace(/[&<>"]/g, (c) =>
@@ -263,7 +282,8 @@ async function openSession(id, keepScroll) {
 }
 
 function renderDetail(d) {
-  hidePieTip();
+  hideTip();
+  state.chartChecks = new Map((d.checks || []).map((c) => [c.id, c]));
   if (d.error) { $("detail").innerHTML = '<p class="muted">' + esc(d.error) + "</p>"; return; }
   const parts = [];
 
@@ -372,12 +392,15 @@ function renderDetail(d) {
     <div class="tablewrap"><table><thead><tr>
       <th>时间</th><th>压缩前</th><th>压缩后</th><th>保留尾</th><th>notice</th><th>副本</th><th>间隔轮数</th>
     </tr></thead><tbody id="timeline-body"></tbody></table></div>
-    <p class="hint">倒序排列，最新在上。「间隔轮数」小于 10 表示在连环压缩——这是要排查的形态。</p>
+    <p class="hint">倒序排列，最新在上。「间隔轮数」小于 10 表示在连环压缩——这是要排查的形态。
+      悬停图表上的点或这里的任意一行，看这一次压缩的完整信息：压掉了多少、保留了多少、
+      估算与实测差多少。「压掉」为负说明这次压缩让 prompt 变大了。</p>
   </div>`);
 
   $("detail").innerHTML = parts.join("");
   setupComposition(d, compItems);
   setupTimeline(d.timeline);
+  setupTimelineHover(d);
 }
 
 function loadRecent() {
@@ -403,6 +426,10 @@ function setupTimeline(timeline) {
   const input = $("recent");
   state.shownTotal = timeline.length;
   const apply = () => {
+    // The drawn series changed, so any hovered index now means a different
+    // compaction. Dropping it is cheaper than remapping it.
+    state.chartHover = null;
+    hideTip();
     drawChart(visibleTimeline(timeline));
     renderTimelineRows(visibleTimeline(timeline));
   };
@@ -445,7 +472,7 @@ function renderTimelineRows(timeline) {
     ? ordered.map((p) => {
         const gap = p.turns != null && p.turns < 10
           ? `<span class="pill bad">${p.turns}</span>` : num(p.turns);
-        return `<tr>
+        return `<tr data-id="${esc(p.id)}">
           <td class="mono">${when(p.at)}</td>
           <td>${num(p.before)}</td>
           <td>${p.after != null ? num(p.after) : "—"}</td>
@@ -554,38 +581,74 @@ function donutPaths(items) {
   }).join("");
 }
 
-let pieTip = null;
-function hidePieTip() {
-  if (pieTip) pieTip.style.display = "none";
+let tipEl = null;
+/// Whoever attached a tip also owns its marker (the donut highlight, the
+/// chart's rule and ring). Scrolling dismisses the box, so it has to dismiss
+/// the marker too — otherwise a hidden box leaves a marker pointing at
+/// nothing. One slot is enough: only one surface is hovered at a time.
+let tipOwnerDismiss = null;
+
+function hideTip() {
+  if (tipEl) tipEl.style.display = "none";
   for (const el of document.querySelectorAll(".pie .on")) el.classList.remove("on");
+  const owner = tipOwnerDismiss;
+  tipOwnerDismiss = null;
+  if (owner) owner();
 }
 
 /// The tooltip is fixed to the viewport, so it must not outlive the card: one
 /// capture-phase dismiss listener, registered once.
-function pieDismissOnScroll() {
-  if (pieDismissOnScroll.done) return;
-  pieDismissOnScroll.done = true;
-  document.addEventListener("scroll", hidePieTip, true);
+function dismissTipOnScroll() {
+  if (dismissTipOnScroll.done) return;
+  dismissTipOnScroll.done = true;
+  document.addEventListener("scroll", hideTip, true);
   document.addEventListener("keydown", (e) => {
     if (e.key !== "Escape") return;
-    hidePieTip();
+    hideTip();
     closeViewer();
   });
 }
 
-function pieTooltip() {
-  if (!pieTip) {
-    pieTip = document.createElement("div");
-    pieTip.className = "pietip";
-    document.body.appendChild(pieTip);
+function tipElement() {
+  if (!tipEl) {
+    tipEl = document.createElement("div");
+    tipEl.className = "tip";
+    document.body.appendChild(tipEl);
   }
-  return pieTip;
+  return tipEl;
+}
+
+/// Placement is shared: the pie and the timeline both hang a box off the
+/// pointer, and both need the same flip when they would run off-screen.
+function placeTip(event) {
+  if (!event) return;
+  const tip = tipElement();
+  const pad = 14;
+  const box = tip.getBoundingClientRect();
+  let x = event.clientX + pad;
+  let y = event.clientY + pad;
+  if (x + box.width > window.innerWidth - 8) x = event.clientX - box.width - pad;
+  if (y + box.height > window.innerHeight - 8) y = event.clientY - box.height - pad;
+  // Last guard: flipping can still land outside a short viewport (a tall box
+  // near the bottom edge), so clamp into the screen rather than off it.
+  const maxX = window.innerWidth - box.width - 8;
+  const maxY = window.innerHeight - box.height - 8;
+  tip.style.left = Math.max(8, Math.min(x, maxX)) + "px";
+  tip.style.top = Math.max(8, Math.min(y, maxY)) + "px";
+}
+
+function showTip(html, event, onDismiss) {
+  const tip = tipElement();
+  tip.innerHTML = html;
+  tip.style.display = "block";
+  tipOwnerDismiss = onDismiss || null;
+  placeTip(event);
 }
 
 /// Detail for one slice. This is the part the stacked bar could not show: it
 /// had a one-line `title` and no room for characters, share of the full prompt
 /// or what is inside a toolResult bucket.
-function pieTipHTML(d, item) {
+function compositionTipHTML(d, item) {
   const rows = [];
   const push = (k, v) => rows.push(`<div class="r"><span>${k}</span><b>${v}</b></div>`);
   push("tokens", num(item.tokens));
@@ -620,8 +683,7 @@ function pieTipHTML(d, item) {
 function setupComposition(d, items) {
   const card = $("pie");
   if (!card || !items.length) return;
-  const tip = pieTooltip();
-  pieDismissOnScroll();
+  dismissTipOnScroll();
   const slices = Array.from(card.querySelectorAll(".slice"));
   const legends = Array.from(card.querySelectorAll(".legend>span"));
   const pairs = [slices, legends];
@@ -638,36 +700,186 @@ function setupComposition(d, items) {
   const show = (index, event) => {
     const item = items[index];
     if (!item) return;
-    tip.innerHTML = pieTipHTML(d, item);
-    tip.style.display = "block";
-    move(event);
     highlight(index, true);
-  };
-  const move = (event) => {
-    if (!event) return;
-    const pad = 14;
-    const box = tip.getBoundingClientRect();
-    let x = event.clientX + pad;
-    let y = event.clientY + pad;
-    if (x + box.width > window.innerWidth - 8) x = event.clientX - box.width - pad;
-    if (y + box.height > window.innerHeight - 8) y = event.clientY - box.height - pad;
-    tip.style.left = Math.max(8, x) + "px";
-    tip.style.top = Math.max(8, y) + "px";
-  };
-  const hide = (index) => {
-    tip.style.display = "none";
-    highlight(index, false);
+    showTip(compositionTipHTML(d, item), event, () => highlight(index, false));
   };
 
   for (const group of pairs) {
     for (const el of group) {
       const index = Number(el.dataset.slice);
       el.addEventListener("mouseenter", (e) => show(index, e));
-      el.addEventListener("mousemove", move);
-      el.addEventListener("mouseleave", () => hide(index));
+      el.addEventListener("mousemove", (e) => placeTip(e));
+      el.addEventListener("mouseleave", hideTip);
       el.addEventListener("click", () => openViewer(items[index]));
     }
   }
+}
+
+// ---------------------------------------------------------------- timeline tip
+
+/// What one compaction did, with the number a reader actually needs: how far
+/// the estimate drifted from what the provider charged. The table shows the
+/// raw columns; this explains the row.
+function pointTipHTML(p, d) {
+  const rows = [];
+  const push = (k, v, cls) =>
+    rows.push(`<div class="r"><span>${k}</span><b class="${cls || ""}">${v}</b></div>`);
+  push("时间", whenFull(p.at));
+  push("压缩前", num(p.before) + " tokens");
+  if (p.after != null) push("压缩后（实测）", num(p.after) + " tokens");
+  push("保留尾", num(p.retained) + " tokens");
+  if (p.summary != null) push("摘要", num(p.summary) + " tokens");
+  if (p.after != null) {
+    const saved = p.before - p.after;
+    const ratio = p.before ? Math.abs(saved) / p.before : 0;
+    // A compaction can make the prompt *bigger* (a fresh summary of a short
+    // tail costs more than it removes). "压掉 -8,155" reads as a bug in the
+    // tool, so the negative case gets its own wording.
+    if (saved < 0) {
+      push("反而增大", `+${num(-saved)} (${pct(ratio)})`, "bad");
+    } else {
+      push("压掉", `${num(saved)} (${pct(ratio)})`, "ok");
+    }
+  }
+  if (p.retainedEntries != null) push("保留条目", num(p.retainedEntries) + " 条");
+  if (p.notice != null) {
+    push("重复通知", `${num(p.copies)} 份 · ${num(p.notice)} tokens`,
+      p.notice > 5000 ? "bad" : "");
+  }
+  push("间隔轮数", p.turns == null ? "—" : num(p.turns) + " 轮",
+    p.turns != null && p.turns < 10 ? "bad" : "");
+
+  // The estimate lives in `checks`, keyed by compaction id. Its `measured` is
+  // the same number as `after` — one usage, read twice — so showing both would
+  // be a duplicate row pretending to be a second measurement.
+  const check = d && state.chartChecks.get(p.id);
+  // Each fact gets its own line: a compaction can both have no measured
+  // follow-up and sit in a tight run, and one note overwriting the other
+  // hides whichever the reader needed.
+  const notes = [];
+  if (check) {
+    const err = check.error;
+    const cls = Math.abs(err) < 0.05 ? "ok" : Math.abs(err) < 0.15 ? "" : "bad";
+    rows.push(`<hr><div class="r"><span>估算</span><b>${num(check.estimated)} tokens</b></div>`);
+    rows.push(`<div class="r"><span>误差</span><b class="${cls}">`
+      + `${(err * 100).toFixed(1)}%</b></div>`);
+  } else {
+    notes.push("这一次之后没有可用的实测 prompt，无法校对估算。");
+  }
+  if (p.turns != null && p.turns < 10) {
+    notes.push(`两次压缩之间只有 ${num(p.turns)} 轮——在连环压缩，先查这里。`);
+  }
+  return `<div class="h"><i style="background:${p.turns != null && p.turns < 10
+      ? "#d46a6a" : "#8b7fd4"}"></i>${esc(p.id)}</div>
+    ${rows.join("")}${notes.map((n) => `<div class="n">${n}</div>`).join("")}`;
+}
+
+/// Nearest point on the x axis, in CSS pixels. The chart is a series of
+/// samples, not a solid shape: the pointer rarely lands exactly on one, and a
+/// 3 px dot is not a hit target.
+function nearestPoint(canvas, event) {
+  const list = state.chartTimeline;
+  if (!list.length) return -1;
+  const box = canvas.getBoundingClientRect();
+  const width = canvas.clientWidth || box.width || 800;
+  const padL = 52, padR = 12;
+  const w = width - padL - padR;
+  const x = event.clientX - box.left;
+  if (list.length === 1) return 0;
+  const ratio = (x - padL) / (w || 1);
+  const index = Math.round(ratio * (list.length - 1));
+  return Math.max(0, Math.min(list.length - 1, index));
+}
+
+function setupTimelineHover(d) {
+  const canvas = $("chart");
+  if (!canvas) return;
+  dismissTipOnScroll();
+  // Reading the drawn series rather than a captured copy: the "recent N"
+  // control redraws the chart, and the hit test has to follow it.
+  const rows = () => Array.from($("timeline-body")?.querySelectorAll("tr") || []);
+
+  /// The table is newest-first, the chart oldest-first; row i of the table is
+  /// the last entry the chart draws minus i. Keeping this in one function
+  /// stops the two orders from drifting apart.
+  const rowFor = (index) => {
+    const ordered = rows();
+    const timeline = state.chartTimeline;
+    if (!ordered.length || !timeline.length) return null;
+    return ordered[timeline.length - 1 - index] || null;
+  };
+
+  const mark = (index) => {
+    for (const row of rows()) row.classList.remove("hot");
+    const row = index >= 0 ? rowFor(index) : null;
+    if (row) row.classList.add("hot");
+  };
+
+  /// A redraw per mousemove would run the whole series again for every pixel;
+  /// one frame is enough and the pointer cannot outrun it.
+  let queued = false;
+  const redraw = () => {
+    if (queued) return;
+    queued = true;
+    window.requestAnimationFrame(() => {
+      queued = false;
+      drawChart(state.chartTimeline);
+    });
+  };
+
+  /// Clearing the marker is what the tip must undo when it is dismissed by a
+  /// scroll, not only by a mouseleave. Idempotent, so both paths can run.
+  const clearMarker = () => {
+    if (state.chartHover != null) {
+      state.chartHover = null;
+      redraw();
+    }
+    mark(-1);
+  };
+
+  const show = (event) => {
+    const index = nearestPoint(canvas, event);
+    const point = state.chartTimeline[index];
+    if (!point) return;
+    if (state.chartHover !== index) {
+      state.chartHover = index;
+      redraw();
+      mark(index);
+    }
+    showTip(pointTipHTML(point, d), event, clearMarker);
+  };
+
+  canvas.addEventListener("mousemove", show);
+  canvas.addEventListener("mouseleave", hideTip);
+
+  // The table is the same series row by row. Hovering a row gets the same box
+  // (it carries the estimate-vs-measured error, which no column shows) and
+  // lifts the matching point out of a 200-dot chart.
+  const body = $("timeline-body");
+  if (!body) return;
+  const indexOfRow = (row) => {
+    const ordered = rows();
+    const at = ordered.indexOf(row);
+    if (at < 0) return -1;
+    return state.chartTimeline.length - 1 - at;
+  };
+  const rowAt = (event) => {
+    const row = event.target.closest("tr");
+    if (!row || !body.contains(row)) return -1;
+    return indexOfRow(row);
+  };
+  body.addEventListener("mousemove", (event) => {
+    const index = rowAt(event);
+    const point = state.chartTimeline[index];
+    if (!point) return;
+    if (state.chartHover !== index) {
+      state.chartHover = index;
+      redraw();
+      mark(index);
+    }
+    showTip(pointTipHTML(point, d), event, clearMarker);
+  });
+  body.addEventListener("mouseleave", hideTip);
 }
 
 // ------------------------------------------------------------- content viewer
@@ -717,7 +929,7 @@ function closeViewer() {
 
 function openViewer(item) {
   if (!item || item.fixed) return;
-  hidePieTip();
+  hideTip();
   viewer.label = item.label;
   viewer.total = item.entries || 0;
   viewer.page = 0;
@@ -800,6 +1012,7 @@ function entryCard(row) {
 
 function drawChart(timeline) {
   const canvas = $("chart");
+  state.chartTimeline = timeline;
   if (!canvas || !timeline.length) return;
   const dpr = window.devicePixelRatio || 1;
   const cssW = canvas.clientWidth || 800;
@@ -852,6 +1065,19 @@ function drawChart(timeline) {
     ctx.fillStyle = (p.turns != null && p.turns < 10) ? "#d46a6a" : "#8b7fd4";
     ctx.beginPath(); ctx.arc(x(i), y(p.before), 2.5, 0, Math.PI * 2); ctx.fill();
   });
+
+  // The hovered point gets a rule and a ring: the tooltip says what the point
+  // is, this says which point it is talking about.
+  const hot = state.chartHover;
+  if (hot != null && timeline[hot]) {
+    const hx = x(hot);
+    ctx.strokeStyle = "rgba(232,228,240,.35)"; ctx.lineWidth = 1;
+    ctx.setLineDash([3, 3]);
+    ctx.beginPath(); ctx.moveTo(hx, padT); ctx.lineTo(hx, padT + h); ctx.stroke();
+    ctx.setLineDash([]);
+    ctx.fillStyle = "#e8e4f0";
+    ctx.beginPath(); ctx.arc(hx, y(timeline[hot].before), 4, 0, Math.PI * 2); ctx.fill();
+  }
 
   // X labels: first and last. With one point they would draw on top of each
   // other, so a single centred label is enough.

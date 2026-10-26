@@ -118,6 +118,8 @@ pub fn detail(session: &Session, leaf_id: Option<&str>) -> Value {
                 "before": point.tokens_before,
                 "after": point.prompt_after,
                 "retained": point.retained_tokens,
+                "retainedEntries": point.retained_entries,
+                "summary": point.summary_tokens,
                 "notice": point.notice_tokens,
                 "copies": point.notice_copies,
                 "turns": point.gap_turns,
