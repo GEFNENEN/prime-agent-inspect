@@ -84,13 +84,43 @@ impl Usage {
         }
         self.input + self.cache_read + self.cache_write
     }
+
+    /// Whether the reported parts add up to the reported total.
+    ///
+    /// The 61 corrupt rows here do not just have a bad `totalTokens`: their
+    /// `cacheRead` is inflated too, and together they account for 27% of every
+    /// cached token in the session. Any sum over the parts — cache hit rate,
+    /// per-model prompt totals — has to skip them or it reports a number that
+    /// is wrong by a quarter while looking precise.
+    #[must_use]
+    pub fn parts_agree(self) -> bool {
+        if self.total == 0 {
+            return true; // nothing to check against; the parts are all we have
+        }
+        let parts = self.input + self.cache_read + self.cache_write + self.output;
+        let tolerance = (self.total / 500).max(2);
+        parts.abs_diff(self.total) <= tolerance
+    }
 }
 
 #[derive(Debug, Clone)]
 pub enum Kind {
     User { chars: Chars },
-    Assistant { chars: Chars, usage: Option<Usage> },
-    ToolResult { chars: Chars, tool: String },
+    Assistant {
+        chars: Chars,
+        usage: Option<Usage>,
+        /// `provider/model` as reported by the call, so the detail view can
+        /// show which models this session actually ran on. A session that
+        /// switched providers mid-run looks like one number otherwise.
+        model: Option<String>,
+    },
+    ToolResult {
+        chars: Chars,
+        tool: String,
+        /// Failed tool calls are a different story from successful ones: they
+        /// are usually long error text that the model then works around.
+        is_error: bool,
+    },
     Compaction {
         summary_chars: Chars,
         tokens_before: u64,
@@ -99,6 +129,28 @@ pub enum Kind {
     },
     BranchSummary { summary_chars: Chars },
     CustomMessage { custom_type: String, chars: Chars },
+    /// `type: "custom"` — harness bookkeeping rather than transcript. The goal
+    /// state snapshots and refinement records live here; they are not sent to
+    /// the model, but they are what the session *did*.
+    Custom {
+        custom_type: String,
+        /// A short human handle: the goal objective, the refinement summary.
+        label: String,
+        chars: Chars,
+    },
+    GitState { commit: String, branch: String },
+    /// Tokens a subagent spent, attributed to the turn that spawned it. The
+    /// session's own usage excludes them, so a parent with heavy delegation
+    /// looks cheap until this is added in.
+    ChildUsage {
+        target: String,
+        origin: String,
+        /// The child's running total *prompt* (input + cacheRead + cacheWrite),
+        /// taken from `aggregateUsage`'s parts. The `totalTokens` field beside
+        /// them is frozen at the child's first call and must not be used.
+        prompt: u64,
+        output: u64,
+    },
     SessionInfo { name: String },
     ModelChange { provider: String, model: String },
     Other { kind: String, chars: Chars },
@@ -129,6 +181,11 @@ impl Entry {
             | Kind::ToolResult { chars, .. }
             | Kind::CustomMessage { chars, .. }
             | Kind::Other { chars, .. } => *chars,
+            // Custom is harness bookkeeping: it never reaches the model, so it
+            // must not inflate any context number.
+            Kind::Custom { .. } | Kind::GitState { .. } | Kind::ChildUsage { .. } => {
+                Chars::default()
+            }
             Kind::Compaction { summary_chars, .. } | Kind::BranchSummary { summary_chars } => {
                 *summary_chars
             }
@@ -145,6 +202,9 @@ impl Entry {
             Kind::Compaction { .. } => "compaction",
             Kind::BranchSummary { .. } => "branch_summary",
             Kind::CustomMessage { .. } => "custom_message",
+            Kind::Custom { .. } => "custom",
+            Kind::GitState { .. } => "git_state",
+            Kind::ChildUsage { .. } => "child_usage",
             Kind::SessionInfo { .. } => "session_info",
             Kind::ModelChange { .. } => "model_change",
             Kind::Other { kind, .. } => kind,
@@ -184,6 +244,19 @@ pub fn parse_entry_at(value: &Value, offset: u64) -> Option<Entry> {
     })
 }
 
+/// `provider/model`, or just the model when the provider is absent. Sessions
+/// can change provider mid-run; the pair is what the user configured.
+fn model_label(message: &Value) -> Option<String> {
+    let model = message.get("model").and_then(Value::as_str)?;
+    if model.is_empty() {
+        return None;
+    }
+    Some(match message.get("provider").and_then(Value::as_str) {
+        Some(provider) if !provider.is_empty() => format!("{provider}/{model}"),
+        _ => model.to_string(),
+    })
+}
+
 fn classify(value: &Value) -> Kind {
     let entry_type = value.get("type").and_then(Value::as_str).unwrap_or("");
     match entry_type {
@@ -201,14 +274,29 @@ fn classify(value: &Value) -> Kind {
                 "assistant" => Kind::Assistant {
                     chars,
                     usage: message.get("usage").and_then(parse_usage),
+                    model: model_label(message),
                 },
                 "toolResult" => Kind::ToolResult {
                     chars,
+                    // A malformed call can put the rest of its own markup in
+                    // here: one row's `toolName` is literally
+                    // "invoke>\n<parameter name=". Only the first line means
+                    // anything, and it is still the name the model asked for.
                     tool: message
                         .get("toolName")
                         .and_then(Value::as_str)
                         .unwrap_or("")
-                        .to_string(),
+                        .lines()
+                        .next()
+                        .unwrap_or("")
+                        .trim()
+                        .chars()
+                        .take(32)
+                        .collect(),
+                    is_error: message
+                        .get("isError")
+                        .and_then(Value::as_bool)
+                        .unwrap_or(false),
                 },
                 other => Kind::Other {
                     kind: format!("message:{other}"),
@@ -240,6 +328,64 @@ fn classify(value: &Value) -> Kind {
                 .to_string(),
             chars: str_chars(value.get("content")),
         },
+        "custom" => Kind::Custom {
+            custom_type: value
+                .get("customType")
+                .and_then(Value::as_str)
+                .unwrap_or("")
+                .to_string(),
+            // The goal objective and the refinement summary are the two fields
+            // that say what happened; everything else in `data` is a counter
+            // that changes every turn.
+            label: ["objective", "summary", "rationale"]
+                .iter()
+                .find_map(|key| {
+                    value
+                        .get("data")
+                        .and_then(|data| data.get(*key))
+                        .and_then(Value::as_str)
+                })
+                .map(|text| text.chars().take(160).collect())
+                .unwrap_or_default(),
+            chars: Chars::default(),
+        },
+        "git_state" => Kind::GitState {
+            commit: value
+                .get("git")
+                .and_then(|git| git.get("commit"))
+                .and_then(Value::as_str)
+                .unwrap_or("")
+                .to_string(),
+            branch: value
+                .get("git")
+                .and_then(|git| git.get("branch"))
+                .and_then(Value::as_str)
+                .unwrap_or("")
+                .to_string(),
+        },
+        "child_usage_attributed" => {
+            let aggregate = value.get("aggregateUsage");
+            let part = |key: &str| {
+                aggregate
+                    .and_then(|usage| usage.get(key))
+                    .and_then(Value::as_u64)
+                    .unwrap_or_default()
+            };
+            Kind::ChildUsage {
+                target: value
+                    .get("targetId")
+                    .and_then(Value::as_str)
+                    .unwrap_or("")
+                    .to_string(),
+                origin: value
+                    .get("origin")
+                    .and_then(Value::as_str)
+                    .unwrap_or("")
+                    .to_string(),
+                prompt: part("input") + part("cacheRead") + part("cacheWrite"),
+                output: part("output"),
+            }
+        }
         "session_info" => Kind::SessionInfo {
             name: value
                 .get("name")

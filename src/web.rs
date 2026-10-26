@@ -215,26 +215,365 @@ pub fn detail(session: &Session, leaf_id: Option<&str>) -> Value {
         },
         "timeline": timeline,
         "checks": checks,
+        "models": model_usage(session, &leaf),
+        "cache": cache_stats(session, &leaf),
+        "tools": tool_stats(session, &leaf),
+        "harness": harness_stats(session, &leaf),
+        "daily": daily_activity(session, &leaf),
         "accuracy": accuracy,
         "notices": notices,
         "entryKinds": entry_kinds(session, &leaf),
     })
 }
 
+/// One row per provider/model the session actually ran on, so a session that
+/// switched providers mid-run does not look like a single number.
+fn model_usage(session: &Session, leaf: &str) -> Vec<Value> {
+    struct Row {
+        calls: u64,
+        peak: u64,
+        prompt: u64,
+        output: u64,
+        first: i64,
+        last: i64,
+        skipped: u64,
+    }
+    let mut rows: std::collections::HashMap<String, Row> = std::collections::HashMap::new();
+    for index in session.branch(leaf) {
+        let entry = &session.entries[index];
+        let Kind::Assistant {
+            usage: Some(usage),
+            model: Some(model),
+            ..
+        } = &entry.kind
+        else {
+            continue;
+        };
+        let row = rows.entry(model.clone()).or_insert(Row {
+            calls: 0,
+            peak: 0,
+            prompt: 0,
+            output: 0,
+            first: entry.at,
+            last: entry.at,
+            skipped: 0,
+        });
+        row.calls += 1;
+        row.peak = row.peak.max(usage.prompt());
+        // Same rule as the cache stats: a row whose parts disagree with its
+        // total carries an inflated `cacheRead`, so it would add tokens that
+        // were never sent.
+        if usage.parts_agree() {
+            row.prompt += usage.prompt();
+            row.output += usage.output;
+        } else {
+            row.skipped += 1;
+        }
+        row.first = row.first.min(entry.at);
+        row.last = row.last.max(entry.at);
+    }
+    let mut out: Vec<Value> = rows
+        .into_iter()
+        .map(|(model, row)| {
+            json!({
+                "model": model,
+                "calls": row.calls,
+                "peak": row.peak,
+                "prompt": row.prompt,
+                "output": row.output,
+                "firstAt": row.first,
+                "lastAt": row.last,
+                "skipped": row.skipped,
+            })
+        })
+        .collect();
+    out.sort_by_key(|row| std::cmp::Reverse(row["calls"].as_u64().unwrap_or_default()));
+    out
+}
+
+/// Cache behaviour, measured rather than assumed: `cacheRead` is the part of
+/// the prompt the provider served from its prefix cache, so the ratio says how
+/// much of everything sent was a hit.
+///
+/// Only rows whose parts agree with their total are counted. The 61 corrupt
+/// rows in the p8 session carry 27% of all `cacheRead` on their own — leaving
+/// them in would move the hit rate by several points and no reader could tell.
+fn cache_stats(session: &Session, leaf: &str) -> Value {
+    let mut read = 0_u64;
+    let mut write = 0_u64;
+    let mut fresh = 0_u64;
+    let mut output = 0_u64;
+    let mut calls = 0_u64;
+    let mut no_cache_calls = 0_u64;
+    let mut skipped = 0_u64;
+    for index in session.branch(leaf) {
+        let Kind::Assistant {
+            usage: Some(usage), ..
+        } = &session.entries[index].kind
+        else {
+            continue;
+        };
+        if usage.prompt() == 0 {
+            continue;
+        }
+        if !usage.parts_agree() {
+            skipped += 1;
+            continue;
+        }
+        calls += 1;
+        read += usage.cache_read;
+        write += usage.cache_write;
+        fresh += usage.input;
+        output += usage.output;
+        if usage.cache_read == 0 && usage.cache_write == 0 {
+            no_cache_calls += 1;
+        }
+    }
+    let sent = fresh + read + write;
+    let hit = if sent == 0 {
+        0.0
+    } else {
+        #[allow(clippy::cast_precision_loss)]
+        let read = read as f64;
+        #[allow(clippy::cast_precision_loss)]
+        let sent = sent as f64;
+        read / sent
+    };
+    json!({
+        "calls": calls,
+        "cacheRead": read,
+        "cacheWrite": write,
+        "fresh": fresh,
+        "output": output,
+        "sent": sent,
+        "hit": hit,
+        "noCacheCalls": no_cache_calls,
+        "skipped": skipped,
+    })
+}
+
+/// Every tool the branch used, with calls, failures and characters. The
+/// composition card says "toolResult is N%"; this says which tool and how often
+/// it failed, which is where the retries come from.
+fn tool_stats(session: &Session, leaf: &str) -> Vec<Value> {
+    struct Row {
+        calls: u64,
+        errors: u64,
+        chars: u64,
+        tokens: u64,
+    }
+    let mut rows: std::collections::HashMap<String, Row> = std::collections::HashMap::new();
+    for index in session.branch(leaf) {
+        let Kind::ToolResult {
+            chars, tool, is_error,
+        } = &session.entries[index].kind
+        else {
+            continue;
+        };
+        let (tokens, _) = crate::token_est::estimate(*chars);
+        let row = rows.entry(tool.clone()).or_insert(Row {
+            calls: 0,
+            errors: 0,
+            chars: 0,
+            tokens: 0,
+        });
+        row.calls += 1;
+        row.tokens += tokens;
+        row.chars += chars.total();
+        if *is_error {
+            row.errors += 1;
+        }
+    }
+    let total_chars: u64 = rows.values().map(|row| row.chars).sum();
+    let mut out: Vec<Value> = rows
+        .into_iter()
+        .map(|(tool, row)| {
+            let share = if total_chars == 0 {
+                0.0
+            } else {
+                #[allow(clippy::cast_precision_loss)]
+                let chars = row.chars as f64;
+                #[allow(clippy::cast_precision_loss)]
+                let total = total_chars as f64;
+                chars / total
+            };
+            json!({
+                "tool": tool,
+                "calls": row.calls,
+                "errors": row.errors,
+                "chars": row.chars,
+                "tokens": row.tokens,
+                "share": share,
+            })
+        })
+        .collect();
+    out.sort_by_key(|row| std::cmp::Reverse(row["chars"].as_u64().unwrap_or_default()));
+    out
+}
+
+/// Harness bookkeeping entries: goal snapshots, refinements, git commits, and
+/// what subagents spent. None of it is transcript — it never reaches the model
+/// — but it is the record of what the session did.
+///
+/// `child_usage_attributed` carries two numbers per row and only one of them
+/// is trustworthy. `childUsage` is that one call's usage; `aggregateUsage` is
+/// the child's running total, but its `totalTokens` field is frozen at the
+/// child's first call (a child that later spends 93M keeps reporting 120,524).
+/// The running *parts* are fine, and they match Σ`childUsage` to within 0.1%,
+/// so a child's total is read from the parts of its last row -- deduplicated by
+/// `targetId`, which is also what makes the per-origin totals correct if a
+/// child ever appears under two origins.
+fn harness_stats(session: &Session, leaf: &str) -> Value {
+    let mut custom: std::collections::HashMap<String, u64> = std::collections::HashMap::new();
+    let mut git: Vec<Value> = Vec::new();
+    // The refinement records are the only place the file says *why* the
+    // harness changed; `label` carries the summary the agent wrote for it.
+    let mut refinements: Vec<Value> = Vec::new();
+    // target id -> running (prompt, output). Rows arrive in file order, so the
+    // last write for a target is its final total.
+    let mut children: std::collections::HashMap<&str, (u64, u64)> = std::collections::HashMap::new();
+    let mut child_origin: std::collections::HashMap<&str, &str> = std::collections::HashMap::new();
+    for index in session.branch(leaf) {
+        let entry = &session.entries[index];
+        match &entry.kind {
+            Kind::Custom {
+                custom_type,
+                label,
+                ..
+            } => {
+                *custom.entry(custom_type.clone()).or_insert(0) += 1;
+                if custom_type == "prime-agent.refinement" && !label.is_empty() {
+                    refinements.push(json!({ "label": label, "at": entry.at }));
+                }
+            }
+            Kind::GitState { commit, branch } => git.push(json!({
+                "commit": commit,
+                "branch": branch,
+                "at": entry.at,
+            })),
+            Kind::ChildUsage {
+                target,
+                origin,
+                prompt,
+                output,
+            } => {
+                children.insert(target.as_str(), (*prompt, *output));
+                child_origin.insert(target.as_str(), origin.as_str());
+            }
+            _ => {}
+        }
+    }
+    let child_prompt: u64 = children.values().map(|(prompt, _)| prompt).sum();
+    let child_output: u64 = children.values().map(|(_, output)| output).sum();
+    // Per origin, over children rather than rows.
+    let mut origins: std::collections::HashMap<&str, (u64, u64, u64)> =
+        std::collections::HashMap::new();
+    for (target, (prompt, output)) in &children {
+        if let Some(origin) = child_origin.get(target) {
+            let slot = origins.entry(origin).or_insert((0, 0, 0));
+            slot.0 += 1;
+            slot.1 += prompt;
+            slot.2 += output;
+        }
+    }
+    let mut origin_rows: Vec<Value> = origins
+        .into_iter()
+        .map(|(origin, (count, tokens, output))| {
+            json!({
+                "origin": origin,
+                "children": count,
+                "tokens": tokens,
+                "output": output,
+            })
+        })
+        .collect();
+    origin_rows.sort_by_key(|row| std::cmp::Reverse(row["tokens"].as_u64().unwrap_or_default()));
+
+    let mut kinds: Vec<Value> = custom
+        .into_iter()
+        .map(|(custom_type, count)| json!({ "type": custom_type, "count": count }))
+        .collect();
+    kinds.sort_by_key(|row| std::cmp::Reverse(row["count"].as_u64().unwrap_or_default()));
+    json!({
+        "custom": kinds,
+        "git": git,
+        "children": children.len(),
+        "childPrompt": child_prompt,
+        "childOutput": child_output,
+        "origins": origin_rows,
+        "refinements": refinements,
+    })
+}
+
+/// Activity per calendar day: entries and tokens. A session that spans 17 days
+/// is mostly idle, and the shape of the work is in where the spikes are.
+fn daily_activity(session: &Session, leaf: &str) -> Vec<Value> {
+    let mut days: std::collections::BTreeMap<&str, (u64, u64, u64)> =
+        std::collections::BTreeMap::new();
+    for index in session.branch(leaf) {
+        let entry = &session.entries[index];
+        let Some(day) = entry.timestamp.get(0..10) else {
+            continue;
+        };
+        let slot = days.entry(day).or_insert((0, 0, 0));
+        slot.0 += 1;
+        if let Kind::Assistant {
+            usage: Some(usage), ..
+        } = &entry.kind
+        {
+            if usage.parts_agree() {
+                slot.1 += usage.prompt();
+                slot.2 += usage.output;
+            }
+        }
+    }
+    days.into_iter()
+        .map(|(day, (entries, prompt, output))| {
+            json!({ "day": day, "entries": entries, "prompt": prompt, "output": output })
+        })
+        .collect()
+}
+
 /// How many entries of each kind sit on the branch, so the UI can show what
 /// the file is mostly made of.
 fn entry_kinds(session: &Session, leaf: &str) -> Vec<Value> {
-    let mut counts: std::collections::HashMap<&str, u64> = std::collections::HashMap::new();
-    for index in session.branch(leaf) {
-        *counts
-            .entry(session.entries[index].kind_name())
-            .or_insert(0) += 1;
+    struct Row {
+        count: u64,
+        chars: u64,
+        cjk: u64,
+        tokens: u64,
     }
-    let mut rows: Vec<(&str, u64)> = counts.into_iter().collect();
-    rows.sort_by_key(|(_, count)| std::cmp::Reverse(*count));
-    rows.into_iter()
-        .map(|(kind, count)| json!({ "kind": kind, "count": count }))
-        .collect()
+    let mut rows: std::collections::HashMap<&str, Row> = std::collections::HashMap::new();
+    for index in session.branch(leaf) {
+        let chars = session.entries[index].chars();
+        let (tokens, _) = crate::token_est::estimate(chars);
+        let row = rows
+            .entry(session.entries[index].kind_name())
+            .or_insert(Row {
+                count: 0,
+                chars: 0,
+                cjk: 0,
+                tokens: 0,
+            });
+        row.count += 1;
+        row.chars += chars.total();
+        row.cjk += chars.cjk;
+        row.tokens += tokens;
+    }
+    let mut out: Vec<Value> = rows
+        .into_iter()
+        .map(|(kind, row)| {
+            json!({
+                "kind": kind,
+                "count": row.count,
+                "chars": row.chars,
+                "cjk": row.cjk,
+                "tokens": row.tokens,
+            })
+        })
+        .collect();
+    out.sort_by_key(|row| std::cmp::Reverse(row["count"].as_u64().unwrap_or_default()));
+    out
 }
 
 /// A page of transcript entries, newest last, for reading the conversation.
@@ -254,7 +593,7 @@ pub fn transcript(session: &Session, leaf: &str, offset: usize, limit: usize) ->
                     let (tokens, _) = crate::token_est::estimate(*chars);
                     (None, tokens)
                 }
-                Kind::ToolResult { chars, tool } => {
+                Kind::ToolResult { chars, tool, .. } => {
                     let (tokens, _) = crate::token_est::estimate(*chars);
                     (Some(tool.clone()), tokens)
                 }
@@ -378,6 +717,7 @@ pub fn slice_text(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::model::Usage;
     use std::io::Write;
     use std::path::{Path, PathBuf};
 
@@ -486,4 +826,58 @@ mod tests {
         assert!(payload["error"].as_str().is_some());
         assert_eq!(payload["rows"].as_array().map(Vec::len), Some(0));
     }
+    /// `Usage::prompt` trusts `totalTokens` because the parts are inflated on
+    /// some rows; `parts_agree` is how a caller knows whether it may sum them.
+    #[test]
+    fn parts_agree_rejects_rows_whose_parts_contradict_the_total() {
+        let good = Usage {
+            input: 1_000,
+            output: 200,
+            cache_read: 9_000,
+            cache_write: 0,
+            total: 10_200,
+            cost: 0.0,
+        };
+        assert!(good.parts_agree());
+        // The real corrupt shape: total stays sane, cacheRead is 6,000× too big.
+        let bad = Usage {
+            input: 1_541_032,
+            output: 344_594,
+            cache_read: 61_140_224,
+            cache_write: 0,
+            total: 33_545,
+            cost: 0.0,
+        };
+        assert!(!bad.parts_agree());
+        // No total at all: nothing to contradict, the parts are all there is.
+        let none = Usage {
+            total: 0,
+            ..good
+        };
+        assert!(none.parts_agree());
+    }
+
+    /// A subagent's `aggregateUsage.totalTokens` is frozen at its first call,
+    /// so the running total has to come from the parts beside it.
+    #[test]
+    fn subagent_spend_comes_from_the_running_parts_not_the_frozen_total() {
+        let (_dir, path) = write_session(&[
+            r#"{"type":"session","id":"s1","timestamp":"2026-01-01T00:00:00.000Z","cwd":"/tmp"}"#,
+            r#"{"type":"message","id":"a1","parentId":"s1","timestamp":"2026-01-01T00:00:01.000Z","message":{"role":"user","content":"go"}}"#,
+            r#"{"type":"child_usage_attributed","id":"c1","parentId":"a1","timestamp":"2026-01-01T00:00:02.000Z","targetId":"k1","origin":"spawn_task","childUsage":{"input":100,"output":10,"cacheRead":900,"cacheWrite":0,"totalTokens":1010},"aggregateUsage":{"input":100,"output":10,"cacheRead":900,"cacheWrite":0,"totalTokens":1010}}"#,
+            // Same child, much later: the parts grew, `totalTokens` did not.
+            r#"{"type":"child_usage_attributed","id":"c2","parentId":"a1","timestamp":"2026-01-01T00:00:03.000Z","targetId":"k1","origin":"spawn_task","childUsage":{"input":200,"output":20,"cacheRead":1800,"cacheWrite":0,"totalTokens":2020},"aggregateUsage":{"input":300,"output":30,"cacheRead":2700,"cacheWrite":0,"totalTokens":1010}}"#,
+        ]);
+        let session = crate::session::load(&path).expect("load");
+        let payload = detail(&session, None);
+        let harness = &payload["harness"];
+        assert_eq!(harness["children"], 1);
+        assert_eq!(
+            harness["childPrompt"], 3_000,
+            "1,000 then 3,000 cumulative; the frozen total would say 1,010"
+        );
+        assert_eq!(harness["origins"][0]["children"], 1);
+        assert_eq!(harness["origins"][0]["tokens"], 3_000);
+    }
+
 }

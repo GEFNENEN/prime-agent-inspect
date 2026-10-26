@@ -36,6 +36,24 @@ main{display:grid;grid-template-columns:360px 1fr;height:calc(100vh - 57px)}
 #detail{overflow:auto;padding:18px 22px}
 .card{background:var(--panel);border:1px solid var(--line);border-radius:10px;
   padding:14px 16px;margin-bottom:16px}
+/* Overview stays put; everything below it is one tab at a time. Six cards
+   stacked made the page a scroll, and nothing was findable twice. */
+.tabs{display:flex;flex-wrap:wrap;gap:2px;border-bottom:1px solid var(--line);
+  margin:4px 0 14px;position:sticky;top:0;background:var(--bg);z-index:5;padding-top:2px}
+.tabs button{background:none;border:0;border-bottom:2px solid transparent;
+  color:var(--dim);padding:8px 14px;font-size:13px;border-radius:0;cursor:pointer}
+.tabs button:hover{color:var(--fg);border-color:var(--line)}
+.tabs button.on{color:var(--fg);border-bottom-color:var(--accent);font-weight:600}
+.tabs .count{color:var(--dim);font-size:11px;margin-left:5px;font-weight:400}
+.tabs button.on .count{color:var(--accent)}
+.panel{display:none}
+.panel.on{display:block}
+/* Two side-by-side blocks inside one card (ledger types / subagent spend). */
+.cols{display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:20px}
+.cols h3{font-size:12px;margin:0 0 8px;font-weight:600;color:var(--dim);
+  text-transform:uppercase;letter-spacing:.05em}
+.cols code{font-family:ui-monospace,Consolas,monospace;font-size:11px;
+  background:var(--panel2);padding:1px 4px;border-radius:3px}
 .card h2{font-size:13px;margin:0 0 12px;font-weight:600;color:var(--dim);
   text-transform:uppercase;letter-spacing:.06em;display:flex;align-items:baseline;gap:8px}
 /* Column names change meaning across tools; a small marker next to the title
@@ -331,22 +349,11 @@ async function openSession(id, keepScroll) {
 
 function renderDetail(d) {
   hideTip();
+  // New DOM: the previous panel's listeners died with their nodes, so the
+  // "already bound" flag has to be cleared along with them.
+  state.chartBound = false;
   state.chartChecks = new Map((d.checks || []).map((c) => [c.id, c]));
   if (d.error) { $("detail").innerHTML = '<p class="muted">' + esc(d.error) + "</p>"; return; }
-  const parts = [];
-
-  // Summary stats. Three numbers carry the card — prompt size, how much of it
-  // is transcript, and how close the session got to the ceiling — so they get
-  // the hero row. Everything else is a fact about the file, and reads better
-  // as one quiet line than as six equal cells.
-  const accuracy = d.accuracy;
-  const acc = accuracy
-    ? `<span class="pill ${accuracy.median < 0.1 ? "ok" : "warn"}"
-        title="每次压缩后重放上下文估算出的 prompt，与下一次真实调用上报的 prompt 相比">误差中位 ${pct(accuracy.median)}</span>`
-    : '<span class="pill" title="这个会话没有可用的实测 prompt">无实测点</span>';
-  const fixedPill = d.fixed.measured
-    ? `<span class="pill ok" title="从 ${num(d.fixed.samples)} 个压缩点反推：实测 prompt 减去重放出的正文">固定 ${num(d.fixed.tokens)} · ${num(d.fixed.samples)} 点实测</span>`
-    : `<span class="pill warn" title="没有实测点可用，这是假设值">固定 ${num(d.fixed.tokens)} · 假设值</span>`;
 
   const full = d.prompt.fullTokens || 0;
   const content = d.prompt.contentTokens || 0;
@@ -355,8 +362,23 @@ function renderDetail(d) {
   const fixedShare = full ? fixedTokens / full : 0;
   const spanMs = d.lastAt && d.firstAt ? d.lastAt - d.firstAt : 0;
   const perCompaction = d.timeline.length ? d.branchEntries / d.timeline.length : 0;
+  const accuracy = d.accuracy;
+  const acc = accuracy
+    ? `<span class="pill ${accuracy.median < 0.1 ? "ok" : "warn"}"
+        title="每次压缩后重放上下文估算出的 prompt，与下一次真实调用上报的 prompt 相比">误差中位 ${pct(accuracy.median)}</span>`
+    : '<span class="pill" title="这个会话没有可用的实测 prompt">无实测点</span>';
+  const fixedPill = d.fixed.measured
+    ? `<span class="pill ok" title="从 ${num(d.fixed.samples)} 个压缩点反推：实测 prompt 减去重放出的正文">固定 ${num(d.fixed.tokens)} · ${num(d.fixed.samples)} 点实测</span>`
+    : `<span class="pill warn" title="没有实测点可用，这是假设值">固定 ${num(d.fixed.tokens)} · 假设值</span>`;
+  const h = d.harness || { custom: [], git: [], origins: [] };
+  const cache = d.cache || {};
 
-  parts.push(`<div class="card"><h2>概览</h2>
+  // Overview: always on screen, above the tabs. Everything else is one tab at
+  // a time — six stacked cards made this page a 3000px scroll where the same
+  // two numbers showed up in three places.
+  const overview = `<div class="card"><h2>概览
+      <span class="muted" style="text-transform:none;letter-spacing:0">${esc(d.name || d.id.slice(0, 8))}${
+        d.headerId ? " · " + esc(d.headerId.slice(0, 8)) : ""}</span></h2>
     <div class="ov-hero">
       <div>
         <div class="k">当前 prompt</div>
@@ -395,6 +417,12 @@ function renderDetail(d) {
       <div class="f"><div class="k">文件大小</div>
         <div class="v">${bytes(d.bytes)}</div>
         <div class="sub">${d.entries ? num(Math.round(d.bytes / d.entries)) + " B/条" : ""}</div></div>
+      <div class="f"><div class="k">模型调用</div>
+        <div class="v">${num(cache.calls || 0)}</div>
+        <div class="sub">${(d.models || []).length} 个模型</div></div>
+      <div class="f"><div class="k">缓存命中</div>
+        <div class="v">${cache.sent ? pct(cache.hit) : "—"}</div>
+        <div class="sub">${cache.sent ? num(cache.cacheRead) + " / " + num(cache.sent) : "无数据"}</div></div>
       <div class="f"><div class="k">分支</div>
         <div class="v">${num(d.branches)}</div>
         <div class="sub">${d.branches > 1 ? "按最新叶子展示" : "无分叉"}</div></div>
@@ -408,74 +436,121 @@ function renderDetail(d) {
       <span class="v">${esc(d.cwd)}</span></div>
     <div class="legend">${acc} ${fixedPill}
       ${d.skippedLines ? `<span class="pill warn">跳过 ${num(d.skippedLines)} 行（无法解析）</span>` : ""}</div>
-  </div>`);
+  </div>`;
 
-  // Composition. A donut over the *whole* prompt: content components plus the
-  // fixed overhead. The old stacked bar only covered content, so the ~11% you
-  // pay for the system prompt and tool definitions had no slice at all.
+  // Tab list. The counts are what the tab is about, so the bar itself already
+  // answers "which one do I want" without opening all four.
   const compItems = compositionItems(d);
-  parts.push(compositionCard(d, compItems));
+  const tabs = [
+    { id: "ctx", label: "上下文组成", count: num(full) + " tok" },
+    { id: "tl", label: "压缩历史", count: num(d.timeline.length) + " 次" },
+    { id: "kinds", label: "条目构成", count: num(d.entryKinds.length) },
+    { id: "notes", label: "重复注入", count: num((d.notices || []).length) },
+    { id: "tools", label: "工具", count: num((d.tools || []).length) },
+    { id: "usage", label: "用量与模型", count: num((d.models || []).length) },
+    { id: "daily", label: "每日活动", count: num((d.daily || []).length) + " 天" },
+    { id: "harness", label: "账本", count: num((h.children || 0)) + " 子会话" },
+  ];
+  const tabbar = `<div class="tabs" id="tabs">${tabs.map((t) =>
+    `<button data-panel="${t.id}">${esc(t.label)}<span class="count">${t.count}</span></button>`
+  ).join("")}</div>`;
 
-  // Retained rows split by tool: the composition above says toolResult is N%,
-  // this says which tool produced it. Same 250 rows, finer granularity.
-  if (d.prompt.tools && d.prompt.tools.length) {
-    const toolTotal = d.prompt.tools.reduce((sum, t) => sum + t.tokens, 0);
-    const tbar = d.prompt.tools.map((t, i) =>
-      `<span style="width:${(t.tokens/(toolTotal||1)*100).toFixed(2)}%;background:${PALETTE[(i+4)%PALETTE.length]}"
-        title="${esc(t.tool)} ${num(t.tokens)}"></span>`).join("");
-    const trows = d.prompt.tools.map((t, i) =>
-      `<tr>
-        <td class="mono"><i style="display:inline-block;width:9px;height:9px;border-radius:2px;
-          background:${PALETTE[(i+4)%PALETTE.length]};margin-right:7px"></i>${esc(t.tool)}</td>
-        <td>${num(t.tokens)}</td>
-        <td>${pct(t.share)}</td>
-        <td>${num(t.entries)}</td>
-        <td>${num(t.chars)}</td>
-      </tr>`).join("");
-    parts.push(`<div class="card"><h2>保留内容的工具细分
-        <span class="muted" style="text-transform:none;letter-spacing:0">同一批 ${num(d.prompt.keptEntries)} 条，按工具拆分</span></h2>
-      <div class="bar">${tbar}</div>
-      <table style="margin-top:12px"><thead><tr>
-        <th>工具</th><th>tokens</th><th>占 toolResult</th><th>条目</th><th>字符</th>
-      </tr></thead><tbody>${trows}</tbody></table>
-      <p class="hint">这是上面「保留 toolResult」那一项的展开：总量相同，只是按工具分开。
-        哪一列最大，就知道该压缩哪类工具的输出。</p></div>`);
+  const panels = [];
+  panels.push(`<div class="panel" id="panel-ctx">${compositionCard(d, compItems)}${
+    retainedToolCard(d)}</div>`);
+  panels.push(`<div class="panel" id="panel-tl">${timelineCards(d)}</div>`);
+  panels.push(`<div class="panel" id="panel-kinds">${kindsCard(d)}</div>`);
+  panels.push(`<div class="panel" id="panel-notes">${noticesCard(d)}</div>`);
+  panels.push(`<div class="panel" id="panel-tools">${toolsCard(d)}</div>`);
+  panels.push(`<div class="panel" id="panel-usage">${usageCard(d)}</div>`);
+  panels.push(`<div class="panel" id="panel-daily">${dailyCard(d)}</div>`);
+  panels.push(`<div class="panel" id="panel-harness">${harnessCard(d)}</div>`);
+
+  $("detail").innerHTML = overview + tabbar + panels.join("");
+  setupComposition(d, compItems);
+  setupTabs(d);
+}
+
+/// One panel at a time. The chart is only laid out once its panel is visible —
+/// `clientWidth` is 0 in a `display:none` panel, so drawing early produces a
+/// canvas with no width and no way to notice.
+function setupTabs(d) {
+  const bar = $("tabs");
+  if (!bar) return;
+  const buttons = Array.from(bar.querySelectorAll("button"));
+  const key = "prime-agent-inspect.tab";
+  const show = (id, remember) => {
+    hideTip();
+    for (const button of buttons) {
+      button.classList.toggle("on", button.dataset.panel === id);
+    }
+    for (const panel of document.querySelectorAll("#detail .panel")) {
+      panel.classList.toggle("on", panel.id === "panel-" + id);
+    }
+    if (remember) {
+      try { localStorage.setItem(key, id); } catch (error) { /* private mode */ }
+    }
+    if (id === "tl") {
+      // The chart has no width while its panel is hidden, so the first draw
+      // waits until the panel is on screen. Bindings are attached once: this
+      // runs on every switch back, and re-adding the same listeners would
+      // stack a second tooltip per mousemove.
+      if (!state.chartBound) {
+        state.chartBound = true;
+        setupColumnHelp();
+        setupTimeline(d.timeline);
+        setupTimelineHover(d);
+      } else {
+        state.chartHover = null;
+        drawChart(visibleTimeline(d.timeline));
+      }
+    }
+  };
+  let initial = "ctx";
+  try {
+    const saved = localStorage.getItem(key);
+    if (saved && buttons.some((b) => b.dataset.panel === saved)) initial = saved;
+  } catch (error) { /* private mode */ }
+  for (const button of buttons) {
+    button.addEventListener("click", () => show(button.dataset.panel, true));
   }
+  show(initial, false);
+}
 
-  // Entry kinds: the whole branch, including what compaction already dropped.
-  // Its numbers are larger than the composition above on purpose.
-  if (d.entryKinds.length) {
-    const krows = d.entryKinds.map((k) =>
-      `<tr><td class="mono">${esc(k.kind)}</td><td>${num(k.count)}</td></tr>`).join("");
-    parts.push(`<div class="card"><h2>条目构成
-        <span class="muted" style="text-transform:none;letter-spacing:0">整条分支 ${num(d.branchEntries)} 条，含已被压缩丢弃的</span></h2>
-      <table><thead><tr><th>类型</th><th>数量</th></tr></thead><tbody>${krows}</tbody></table>
-      <p class="hint">这是文件里全部条目的类型分布，<b>不是</b>上面那份 prompt 的细分——
-        上面只含切点之后被重放的 ${num(d.prompt.keptEntries)} 条。</p></div>`);
-  }
+/// The retained tail split by tool. This is the same 250 rows as the donut's
+/// toolResult slice, so it belongs inside the composition panel rather than a
+/// card of its own.
+function retainedToolCard(d) {
+  const tools = d.prompt.tools || [];
+  if (!tools.length) return "";
+  const total = tools.reduce((sum, t) => sum + t.tokens, 0);
+  const bar = tools.map((t, i) =>
+    `<span style="width:${(t.tokens / (total || 1) * 100).toFixed(2)}%;background:${PALETTE[(i + 4) % PALETTE.length]}"
+      title="${esc(t.tool)} ${num(t.tokens)}"></span>`).join("");
+  const rows = tools.map((t, i) => `<tr>
+      <td class="mono"><i style="display:inline-block;width:9px;height:9px;border-radius:2px;
+        background:${PALETTE[(i + 4) % PALETTE.length]};margin-right:7px"></i>${esc(t.tool)}</td>
+      <td>${num(t.tokens)}</td><td>${pct(t.share)}</td>
+      <td>${num(t.entries)}</td><td>${num(t.chars)}</td></tr>`).join("");
+  return `<div class="card"><h2>保留内容的工具细分
+      <span class="muted" style="text-transform:none;letter-spacing:0">同一批 ${num(d.prompt.keptEntries)} 条，按工具拆分</span></h2>
+    <div class="bar">${bar}</div>
+    <table style="margin-top:12px"><thead><tr>
+      <th>工具</th><th>tokens</th><th>占 toolResult</th><th>条目</th><th>字符</th>
+    </tr></thead><tbody>${rows}</tbody></table>
+    <p class="hint">这是上面「保留 toolResult」那一项的展开：总量相同，只是按工具分开。
+      哪一列最大，就知道该压缩哪类工具的输出。</p></div>`;
+}
 
-  // Repeated notices
-  if (d.notices.length) {
-    const nrows = d.notices.slice(0, 12).map((n) =>
-      `<tr><td class="mono">${esc(n.type)}</td><td>${num(n.copies)}</td><td>${num(n.chars)}</td></tr>`).join("");
-    parts.push(`<div class="card"><h2>重复注入的消息</h2>
-      <table><thead><tr><th>类型</th><th>份数</th><th>字符</th></tr></thead>
-      <tbody>${nrows}</tbody></table>
-      <p class="hint">同一类型重复出现，是上下文膨胀的常见来源。</p></div>`);
-  }
-
-  // Timeline: chart and detail table show the same series, so one control
-  // governs both. "Recent N" beats pagination here — a 220-compaction session
-  // is a shape you read at a glance, not page by page.
-  parts.push(`<div class="card"><h2>压缩时间线
+/// Timeline: chart and table are the same series under one "recent N" control.
+function timelineCards(d) {
+  return `<div class="card"><h2>压缩时间线
       <span class="muted" style="text-transform:none;letter-spacing:0">${num(d.timeline.length)} 次</span></h2>
     <div class="tlctl">
       <label for="recent">显示最近</label>
       <input id="recent" type="number" min="0" step="1" inputmode="numeric"
         value="${esc(state.recent)}" title="填 0 显示全部">
-      <span>次</span>
-      <span>（0 = 全部）</span>
-      <span id="recent-note"></span>
+      <span>次</span><span>（0 = 全部）</span><span id="recent-note"></span>
     </div>
     <canvas id="chart" height="240"></canvas>
     <div class="legend">
@@ -483,9 +558,8 @@ function renderDetail(d) {
       <span><i style="background:#6fbf8b"></i>压缩后</span>
       <span><i style="background:#6aa9d4"></i>保留尾</span>
     </div>
-  </div>`);
-
-  parts.push(`<div class="card"><h2>压缩明细
+  </div>
+  <div class="card"><h2>压缩明细
       <span class="muted" style="text-transform:none;letter-spacing:0">共 ${num(d.timeline.length)} 次</span></h2>
     <div class="tablewrap"><table><thead><tr>
       <th>时间</th>
@@ -497,15 +571,200 @@ function renderDetail(d) {
       <th>间隔轮数 <span class="q" data-q="turns">?</span></th>
     </tr></thead><tbody id="timeline-body"></tbody></table></div>
     <p class="hint">倒序排列，最新在上。「间隔轮数」小于 10 表示在连环压缩——这是要排查的形态。
-      悬停图表上的点或这里的任意一行，看这一次压缩的完整信息：压掉了多少、保留了多少、
-      估算与实测差多少。点列名旁的小问号看这一列到底在数什么。</p>
-  </div>`);
+      悬停图表上的点或这里的任意一行，看这一次压缩的完整信息。
+      点列名旁的小问号看这一列到底在数什么。</p></div>`;
+}
 
-  $("detail").innerHTML = parts.join("");
-  setupComposition(d, compItems);
-  setupColumnHelp();
-  setupTimeline(d.timeline);
-  setupTimelineHover(d);
+/// Every entry type on the branch, including what compaction already dropped.
+function kindsCard(d) {
+  if (!d.entryKinds.length) return "";
+  const totalEntries = d.entryKinds.reduce((sum, k) => sum + k.count, 0);
+  const totalChars = d.entryKinds.reduce((sum, k) => sum + (k.chars || 0), 0);
+  const rows = d.entryKinds.map((k, i) => `<tr>
+      <td class="mono"><i style="display:inline-block;width:9px;height:9px;border-radius:2px;
+        background:${PALETTE[i % PALETTE.length]};margin-right:7px"></i>${esc(k.kind)}</td>
+      <td>${num(k.count)}</td>
+      <td>${num(k.chars || 0)}</td>
+      <td>${totalChars ? pct((k.chars || 0) / totalChars) : "—"}</td>
+      <td>${num(k.tokens || 0)}</td></tr>`).join("");
+  return `<div class="card"><h2>条目构成
+      <span class="muted" style="text-transform:none;letter-spacing:0">整条分支 ${num(d.branchEntries)} 条，含已被压缩丢弃的</span></h2>
+    <table><thead><tr><th>类型</th><th>数量</th><th>字符</th><th>字符占比</th><th>约 tokens</th></tr></thead>
+    <tbody>${rows}</tbody></table>
+    <p class="hint">这是文件里全部 ${num(totalEntries)} 条的类型分布，<b>不是</b>prompt 的细分——
+      prompt 只含切点之后被重放的 ${num(d.prompt.keptEntries)} 条。字符为 0 的类型是账本记录
+      （目标状态、子代理用量、git 提交），它们从不进入上下文。</p></div>`;
+}
+
+/// Messages injected again and again: the usual reason a prompt grows without
+/// the conversation growing.
+function noticesCard(d) {
+  const notices = d.notices || [];
+  if (!notices.length) {
+    return `<div class="card"><h2>重复注入的消息</h2>
+      <p class="hint">没有重复注入的类型。</p></div>`;
+  }
+  const totalChars = notices.reduce((sum, n) => sum + n.chars, 0);
+  const rows = notices.map((n) => `<tr>
+      <td class="mono">${esc(n.type)}</td><td>${num(n.copies)}</td>
+      <td>${num(n.chars)}</td><td>${totalChars ? pct(n.chars / totalChars) : "—"}</td>
+      <td>${num(n.copies ? Math.round(n.chars / n.copies) : 0)}</td></tr>`).join("");
+  return `<div class="card"><h2>重复注入的消息
+      <span class="muted" style="text-transform:none;letter-spacing:0">${num(notices.length)} 类，共 ${num(totalChars)} 字符</span></h2>
+    <table><thead><tr><th>类型</th><th>份数</th><th>字符</th><th>占比</th><th>每次约</th></tr></thead>
+    <tbody>${rows}</tbody></table>
+    <p class="hint">同一类型反复出现，是上下文膨胀的常见来源。把「份数」乘以「每次约」，
+      就是这一类在整条分支上占掉的字符。ipython_state、heartbeat_prompt 这类每轮都发的，
+      通常是最大的那一项。</p></div>`;
+}
+
+/// Tools, with failure counts. Error text is usually the long part of a failed
+/// call, and a tool that fails often is where the retries come from.
+function toolsCard(d) {
+  const tools = d.tools || [];
+  if (!tools.length) return "";
+  const totalChars = tools.reduce((sum, t) => sum + t.chars, 0);
+  const errors = tools.reduce((sum, t) => sum + t.errors, 0);
+  const rows = tools.filter((t) => t.calls >= 1).map((t, i) => `<tr>
+      <td class="mono"><i style="display:inline-block;width:9px;height:9px;border-radius:2px;
+        background:${PALETTE[i % PALETTE.length]};margin-right:7px"></i>${esc(t.tool)}</td>
+      <td>${num(t.calls)}</td>
+      <td>${num(t.chars)}</td>
+      <td>${pct(t.share)}</td>
+      <td>${num(Math.round(t.chars / Math.max(1, t.calls)))}</td>
+      <td>${t.errors ? `<span class="pill bad">${num(t.errors)}</span>` : "0"}</td></tr>`).join("");
+  return `<div class="card"><h2>工具调用
+      <span class="muted" style="text-transform:none;letter-spacing:0">${num(tools.length)} 个工具 · ${num(totalChars)} 字符 · ${num(errors)} 次失败</span></h2>
+    <table><thead><tr><th>工具</th><th>调用</th><th>结果字符</th><th>占全部结果</th><th>平均每次</th><th>失败</th></tr></thead>
+    <tbody>${rows}</tbody></table>
+    <p class="hint">只统计 toolResult 条目，也就是工具返回的文本。「平均每次」是判断
+      要不要收紧输出上限的依据：一次返回几万字符的工具，几百次调用就能占满一个窗口。</p></div>`;
+}
+
+/// Per-model usage and cache behaviour. A session that switched providers
+/// mid-run has a misleading single number until this is split.
+function usageCard(d) {
+  const models = d.models || [];
+  const cache = d.cache || {};
+  const modelRows = models.map((m) => `<tr>
+      <td class="mono">${esc(m.model)}</td>
+      <td>${num(m.calls)}</td>
+      <td>${num(m.prompt)}</td>
+      <td>${num(Math.round(m.prompt / Math.max(1, m.calls)))}</td>
+      <td>${num(m.output)}</td>
+      <td>${m.peak ? num(m.peak) : "—"}</td>
+      <td class="muted">${when(m.firstAt)} → ${when(m.lastAt)}</td></tr>`).join("");
+  // `cache.skipped` and the per-model counts are the same rows counted from
+  // two angles; adding them reported 122 for 61 bad rows.
+  const skipped = cache.skipped || 0;
+  return `<div class="card"><h2>用量与模型
+      <span class="muted" style="text-transform:none;letter-spacing:0">${num(cache.calls || 0)} 次调用</span></h2>
+    <div class="ov-hero" style="grid-template-columns:repeat(4,minmax(0,1fr))">
+      <div><div class="k">发出去的 prompt</div>
+        <div class="v">${num(cache.sent || 0)}</div>
+        <div class="sub">输入 ${num(cache.fresh || 0)} + 缓存读 ${num(cache.cacheRead || 0)}</div></div>
+      <div><div class="k">缓存命中率</div>
+        <div class="v">${cache.sent ? pct(cache.hit) : "—"}</div>
+        <div class="sub">${num(cache.noCacheCalls || 0)} 次未走缓存</div></div>
+      <div><div class="k">生成</div>
+        <div class="v">${num(cache.output || 0)}</div>
+        <div class="sub">tokens</div></div>
+      <div><div class="k">子代理</div>
+        <div class="v">${num(h0(d, "childPrompt"))}</div>
+        <div class="sub">${num(h0(d, "children"))} 个子会话 · 独立计费</div></div>
+    </div>
+    <table style="margin-top:14px"><thead><tr>
+      <th>模型</th><th>调用</th><th>prompt 合计</th><th>平均</th><th>生成</th><th>峰值</th><th>时间范围</th>
+    </tr></thead><tbody>${modelRows}</tbody></table>
+    <p class="hint">「prompt 合计」是每次调用的 prompt 加起来，所以命中缓存的部分也计入——
+      它衡量的是重复发送了多少，不是账单。缓存命中率高说明前缀被复用得好；
+      命中率低的长会话，每一轮都在为同一段前缀付全额。
+      ${skipped ? `<br>另有 ${num(skipped)} 行上报的用量分项与 totalTokens 不自洽（相差几十倍），
+        已从所有合计中剔除：这些行的 cacheRead 虚高，留着会把命中率抬上去。` : ""}</p></div>`;
+}
+
+/// Helper for a harness number that may be missing.
+function h0(d, key) {
+  const h = d.harness || {};
+  return h[key] == null ? "—" : num(h[key]);
+}
+
+/// Activity per day. A session spanning 17 days is mostly idle; the shape is in
+/// where the spikes are.
+function dailyCard(d) {
+  const daily = d.daily || [];
+  if (!daily.length) return "";
+  const maxEntries = Math.max(...daily.map((x) => x.entries), 1);
+  const rows = daily.map((x) => `<tr>
+      <td class="mono">${esc(x.day)}</td>
+      <td>${num(x.entries)}</td>
+      <td style="width:34%"><div class="bar" style="height:6px"><span
+        style="width:${(x.entries / maxEntries * 100).toFixed(1)}%;background:var(--accent)"></span></div></td>
+      <td>${num(x.prompt)}</td>
+      <td>${num(x.output)}</td></tr>`).join("");
+  const totalEntries = daily.reduce((sum, x) => sum + x.entries, 0);
+  return `<div class="card"><h2>每日活动
+      <span class="muted" style="text-transform:none;letter-spacing:0">${num(daily.length)} 天 · ${num(totalEntries)} 条</span></h2>
+    <table><thead><tr><th>日期</th><th>条目</th><th></th><th>prompt</th><th>生成</th></tr></thead>
+    <tbody>${rows}</tbody></table>
+    <p class="hint">条目数含所有类型。<b>prompt</b> 是当天各次调用的 prompt 之和，
+      受缓存和压缩影响，不能直接当花费看。</p></div>`;
+}
+
+/// Ledger entries: goals, refinements, commits, subagents. None of it reaches
+/// the model — it is the record of what the session did, kept in the same file.
+function harnessCard(d) {
+  const h = d.harness || { custom: [], git: [], origins: [] };
+  const refinements = h.refinements || [];
+  const customRows = (h.custom || []).map((c) =>
+    `<tr><td class="mono">${esc(c.type)}</td><td>${num(c.count)}</td></tr>`).join("");
+  const originTotal = (h.origins || []).reduce((sum, o) => sum + o.tokens, 0);
+  const originRows = (h.origins || []).map((o) =>
+    `<tr><td class="mono">${esc(o.origin)}</td><td>${num(o.children)}</td><td>${num(o.tokens)}</td>
+      <td>${originTotal ? pct(o.tokens / originTotal) : "—"}</td><td>${num(o.output || 0)}</td></tr>`).join("");
+  const git = h.git || [];
+  // Commits repeat: one `git_state` row per turn that saw a commit.
+  const seen = new Set();
+  const commits = [];
+  for (const g of git) {
+    if (!g.commit || seen.has(g.commit)) continue;
+    seen.add(g.commit);
+    commits.push(g);
+  }
+  const commitRows = commits.slice(-20).reverse().map((g) =>
+    `<tr><td class="mono">${esc(g.commit.slice(0, 8))}</td>
+      <td class="mono">${esc(g.branch || "")}</td>
+      <td class="muted">${whenFull(g.at).slice(0, 16)}</td></tr>`).join("");
+  return `<div class="card"><h2>子代理开销
+      <span class="muted" style="text-transform:none;letter-spacing:0">${num(h.children || 0)} 个子会话 · ${num(h.childPrompt || 0)} tokens</span></h2>
+    <table><thead><tr><th>来源</th><th>子会话</th><th>prompt</th><th>占比</th><th>生成</th></tr></thead>
+    <tbody>${originRows || '<tr><td class="muted">无</td></tr>'}</tbody></table>
+    <p class="hint">按子会话去重后的累计 prompt。「来源」是子会话被谁拉起来的：
+      <code>spawn_task</code> 是显式派发，<code>agent_message</code> 是被消息唤醒，
+      <code>direct_user</code> 是用户直接开的会话。<br>
+      每个子会话的累计值取自它最后一行 <code>aggregateUsage</code> 的各分项——
+      同一行的 <code>totalTokens</code> 字段冻结在子会话第一次调用时（一个后来花了 9,300 万
+      的子会话至今仍报 12 万），不能直接用。</p>
+  </div>
+  <div class="card"><h2>自定义类型
+      <span class="muted" style="text-transform:none;letter-spacing:0">账本记录，从不进入上下文</span></h2>
+    <table><thead><tr><th>类型</th><th>条数</th></tr></thead>
+    <tbody>${customRows || '<tr><td class="muted">无</td></tr>'}</tbody></table>
+    <p class="hint"><code>thread_goal_state</code> 是目标状态快照，几乎每轮都会写一份；
+      <code>prime-agent.refinement</code> 是每次自我改进的记录。它们占了条目数的一成多，
+      但不占一个 token 的上下文。</p>
+    ${refinements.length ? `<h3 style="margin:16px 0 8px;font-size:12px;color:var(--dim);
+      text-transform:uppercase;letter-spacing:.05em">改进记录</h3>
+      <div class="tablewrap" style="max-height:280px"><table><tbody>${refinements.slice().reverse().map((r) =>
+        `<tr><td class="muted" style="white-space:nowrap">${whenFull(r.at).slice(5, 16)}</td>
+          <td style="text-align:left;line-height:1.5">${esc(r.label)}</td></tr>`).join("")}</tbody></table></div>
+      <p class="hint">每次持续 harness 精炼写下的摘要，倒序。这些是会话对自己做了什么改动的记录。</p>` : ""}
+  </div>
+  ${commits.length ? `<div class="card"><h2>提交
+      <span class="muted" style="text-transform:none;letter-spacing:0">${num(commits.length)} 个</span></h2>
+    <div class="tablewrap" style="max-height:300px"><table><thead><tr><th>commit</th><th>分支</th><th>时间</th></tr></thead>
+    <tbody>${commitRows}</tbody></table></div>
+    <p class="hint">只列最近 20 个。同一个 commit 会在多轮里重复出现（一轮一个 <code>git_state</code> 快照），这里已去重。</p></div>` : ""}`;
 }
 
 function loadRecent() {
