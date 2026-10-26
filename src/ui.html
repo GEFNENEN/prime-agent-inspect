@@ -68,9 +68,16 @@ tbody tr:hover{background:var(--panel2)}
 #status.err{color:var(--bad)}
 canvas{width:100%;height:auto;display:block}
 .hint{color:var(--dim);font-size:12px;margin-top:8px}
-.pager{display:flex;align-items:center;gap:8px;margin-top:10px;justify-content:flex-end}
-.pager .info{margin-right:auto;color:var(--dim);font-size:12px}
-.pager button{padding:4px 10px;font-size:12px}
+.tlctl{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:10px;
+  font-size:12px;color:var(--dim)}
+.tlctl input{width:72px;background:var(--panel2);color:var(--fg);
+  border:1px solid var(--line);border-radius:6px;padding:3px 8px;
+  font:inherit;font-variant-numeric:tabular-nums;text-align:right}
+.tlctl input:focus{outline:none;border-color:var(--accent)}
+/* Hundreds of compaction rows: scroll the pane rather than paginate, so the
+   whole tail is reachable without a click per ten rows. */
+.tablewrap{max-height:360px;overflow:auto}
+.tablewrap th{position:sticky;top:0;background:var(--panel);z-index:1}
 </style>
 </head>
 <body>
@@ -91,7 +98,16 @@ canvas{width:100%;height:auto;display:block}
 "use strict";
 
 const PALETTE = ["#8b7fd4","#d4896a","#6fbf8b","#d9b45e","#6aa9d4","#d46a9f","#9ad46a","#c0c0c8"];
-const state = { sessions: [], selected: null, detail: null };
+
+/// How many compactions to show. 0 means all; anything else keeps the newest N,
+/// which is what you want when a session has 200+ of them.
+const RECENT_DEFAULT = 10;
+const RECENT_KEY = "prime-agent-inspect.recent";
+
+const state = {
+  sessions: [], selected: null, detail: null,
+  recent: loadRecent(), shownTotal: 0,
+};
 
 const $ = (id) => document.getElementById(id);
 
@@ -269,8 +285,19 @@ function renderDetail(d) {
       <p class="hint">同一类型重复出现，是上下文膨胀的常见来源。</p></div>`);
   }
 
-  // Timeline chart
-  parts.push(`<div class="card"><h2>压缩时间线 <span class="muted" style="text-transform:none;letter-spacing:0">${d.timeline.length} 次</span></h2>
+  // Timeline: chart and detail table show the same series, so one control
+  // governs both. "Recent N" beats pagination here — a 220-compaction session
+  // is a shape you read at a glance, not page by page.
+  parts.push(`<div class="card"><h2>压缩时间线
+      <span class="muted" style="text-transform:none;letter-spacing:0">${num(d.timeline.length)} 次</span></h2>
+    <div class="tlctl">
+      <label for="recent">显示最近</label>
+      <input id="recent" type="number" min="0" step="1" inputmode="numeric"
+        value="${esc(state.recent)}" title="填 0 显示全部">
+      <span>次</span>
+      <span>（0 = 全部）</span>
+      <span id="recent-note"></span>
+    </div>
     <canvas id="chart" height="240"></canvas>
     <div class="legend">
       <span><i style="background:#d46a6a"></i>压缩前</span>
@@ -279,43 +306,81 @@ function renderDetail(d) {
     </div>
   </div>`);
 
-  // Timeline table, paginated: a long session has hundreds of rows and
-  // rendering them all makes the page heavy for no benefit.
   parts.push(`<div class="card"><h2>压缩明细
       <span class="muted" style="text-transform:none;letter-spacing:0">共 ${num(d.timeline.length)} 次</span></h2>
-    <table><thead><tr>
+    <div class="tablewrap"><table><thead><tr>
       <th>时间</th><th>压缩前</th><th>压缩后</th><th>保留尾</th><th>notice</th><th>副本</th><th>间隔轮数</th>
-    </tr></thead><tbody id="timeline-body"></tbody></table>
-    <div class="pager">
-      <span class="info" id="pager-info"></span>
-      <button id="page-first">« 最新</button>
-      <button id="page-prev">‹ 上一页</button>
-      <button id="page-next">下一页 ›</button>
-      <button id="page-last">最旧 »</button>
-    </div>
+    </tr></thead><tbody id="timeline-body"></tbody></table></div>
     <p class="hint">倒序排列，最新在上。「间隔轮数」小于 10 表示在连环压缩——这是要排查的形态。</p>
   </div>`);
 
   $("detail").innerHTML = parts.join("");
-  drawChart(d.timeline);
-  setupPager(d.timeline);
+  setupTimeline(d.timeline);
 }
 
-const PAGE_SIZE = 10;
-const paging = { page: 0 };
+function loadRecent() {
+  try {
+    const raw = window.localStorage.getItem(RECENT_KEY);
+    const value = raw == null ? NaN : Number.parseInt(raw, 10);
+    if (Number.isFinite(value) && value >= 0) return value;
+  } catch (_) { /* localStorage can be blocked; the default is fine */ }
+  return RECENT_DEFAULT;
+}
 
-/// Render one page of the compaction table. Page 0 is the newest rows.
-function renderTimelinePage(timeline) {
+function saveRecent(value) {
+  try { window.localStorage.setItem(RECENT_KEY, String(value)); } catch (_) {}
+}
+
+/// The tail of the (chronological) timeline, per the current setting.
+function visibleTimeline(timeline) {
+  const n = state.recent;
+  return n > 0 && n < timeline.length ? timeline.slice(timeline.length - n) : timeline;
+}
+
+function setupTimeline(timeline) {
+  const input = $("recent");
+  state.shownTotal = timeline.length;
+  const apply = () => {
+    drawChart(visibleTimeline(timeline));
+    renderTimelineRows(visibleTimeline(timeline));
+  };
+  input.value = String(state.recent);
+  input.addEventListener("input", () => {
+    const raw = input.value.trim();
+    if (raw === "") return; // mid-edit: keep the last valid view
+    const value = Number.parseInt(raw, 10);
+    if (!Number.isFinite(value) || value < 0) return;
+    state.recent = value;
+    saveRecent(value);
+    apply();
+  });
+  // Blur or Enter with an empty/garbage box falls back to the default rather
+  // than leaving the table showing something the field no longer describes.
+  input.addEventListener("change", () => {
+    const value = Number.parseInt(input.value, 10);
+    state.recent = Number.isFinite(value) && value >= 0 ? value : RECENT_DEFAULT;
+    input.value = String(state.recent);
+    saveRecent(state.recent);
+    apply();
+  });
+  apply();
+}
+
+/// Newest first. Rows are all in the DOM — the wrap scrolls, so a 220-row
+/// tail stays reachable without paging.
+function renderTimelineRows(timeline) {
   const body = $("timeline-body");
   if (!body) return;
-  const pages = Math.max(1, Math.ceil(timeline.length / PAGE_SIZE));
-  paging.page = Math.min(Math.max(0, paging.page), pages - 1);
-  const start = paging.page * PAGE_SIZE;
+  const note = $("recent-note");
+  const shown = timeline.length;
+  if (note) {
+    note.textContent = shown < state.shownTotal
+      ? `显示最近 ${num(shown)} / ${num(state.shownTotal)} 次`
+      : "";
+  }
   const ordered = timeline.slice().reverse();
-  const slice = ordered.slice(start, start + PAGE_SIZE);
-
-  body.innerHTML = slice.length
-    ? slice.map((p) => {
+  body.innerHTML = ordered.length
+    ? ordered.map((p) => {
         const gap = p.turns != null && p.turns < 10
           ? `<span class="pill bad">${p.turns}</span>` : num(p.turns);
         return `<tr>
@@ -329,28 +394,6 @@ function renderTimelinePage(timeline) {
         </tr>`;
       }).join("")
     : '<tr><td colspan="7" class="muted">无压缩</td></tr>';
-
-  $("pager-info").textContent = timeline.length
-    ? `第 ${paging.page + 1} / ${pages} 页 · ${start + 1}–${Math.min(start + PAGE_SIZE, timeline.length)} 条，共 ${timeline.length} 条`
-    : "无压缩记录";
-  $("page-first").disabled = paging.page === 0;
-  $("page-prev").disabled = paging.page === 0;
-  $("page-next").disabled = paging.page >= pages - 1;
-  $("page-last").disabled = paging.page >= pages - 1;
-}
-
-function setupPager(timeline) {
-  paging.page = 0;
-  renderTimelinePage(timeline);
-  const go = (page) => {
-    paging.page = page;
-    renderTimelinePage(timeline);
-  };
-  const pages = Math.max(1, Math.ceil(timeline.length / PAGE_SIZE));
-  $("page-first").onclick = () => go(0);
-  $("page-prev").onclick = () => go(paging.page - 1);
-  $("page-next").onclick = () => go(paging.page + 1);
-  $("page-last").onclick = () => go(pages - 1);
 }
 
 function drawChart(timeline) {
@@ -408,11 +451,14 @@ function drawChart(timeline) {
     ctx.beginPath(); ctx.arc(x(i), y(p.before), 2.5, 0, Math.PI * 2); ctx.fill();
   });
 
-  // X labels: first and last
+  // X labels: first and last. With one point they would draw on top of each
+  // other, so a single centred label is enough.
   ctx.fillStyle = "#9a93ab"; ctx.textAlign = "left";
   ctx.fillText(when(timeline[0].at), padL, cssH - 8);
-  ctx.textAlign = "right";
-  ctx.fillText(when(timeline[timeline.length - 1].at), padL + w, cssH - 8);
+  if (timeline.length > 1) {
+    ctx.textAlign = "right";
+    ctx.fillText(when(timeline[timeline.length - 1].at), padL + w, cssH - 8);
+  }
 }
 
 $("refresh").addEventListener("click", refreshList);
