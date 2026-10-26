@@ -115,19 +115,33 @@ impl Session {
     /// one. Peak answers "how close did this session get to the ceiling".
     #[must_use]
     pub fn prompt_extremes(&self, leaf_id: &str) -> (u64, u64) {
+        let (peak, _, newest) = self.prompt_peak(leaf_id);
+        (peak, newest)
+    }
+
+    /// Peak prompt, when it happened, and the newest prompt. The timestamp is
+    /// what turns "369k" from a number into a fact about the session: a peak at
+    /// the very start is a different story from one at the end.
+    #[must_use]
+    pub fn prompt_peak(&self, leaf_id: &str) -> (u64, i64, u64) {
         let mut peak = 0;
+        let mut peak_at = 0;
         let mut newest = 0;
         for index in self.branch(leaf_id) {
+            let entry = &self.entries[index];
             if let Kind::Assistant {
                 usage: Some(usage), ..
-            } = &self.entries[index].kind
+            } = &entry.kind
             {
                 let prompt = usage.prompt();
-                peak = peak.max(prompt);
+                if prompt > peak {
+                    peak = prompt;
+                    peak_at = entry.at;
+                }
                 newest = prompt;
             }
         }
-        (peak, newest)
+        (peak, peak_at, newest)
     }
 }
 

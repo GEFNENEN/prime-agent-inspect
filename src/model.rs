@@ -50,14 +50,38 @@ pub struct Usage {
     pub output: u64,
     pub cache_read: u64,
     pub cache_write: u64,
+    /// The provider's own total for the call: prompt plus generated tokens.
+    /// Kept because the parts are not always trustworthy — see [`Usage::prompt`].
+    pub total: u64,
     pub cost: f64,
 }
 
 impl Usage {
-    /// The prompt the provider actually saw. `input` alone excludes the cached
-    /// prefix, which is the majority of a long session's prompt.
+    /// The prompt the provider actually saw.
+    ///
+    /// `input` alone excludes the cached prefix, which is the majority of a
+    /// long session's prompt, so the parts have to be summed. But on this
+    /// machine some calls (61 of 21,732 in the p8 session, all on streamed
+    /// turns) come back with `input`/`cacheRead`/`output` inflated by orders of
+    /// magnitude while `totalTokens` stays sane — one call claims a 62M-token
+    /// prompt. Summing the parts then reports a peak ~250× the real ceiling,
+    /// and every consumer (peak, calibration, the fixed-overhead residual)
+    /// inherits it.
+    ///
+    /// `totalTokens` equals prompt + output on all 21,632 sane rows, so it is
+    /// the field to trust: subtract the output. On the corrupt rows `output` is
+    /// inflated as well, so it cannot be subtracted — but the total still sits
+    /// on the curve (33,545 between neighbours of 26,795 and 33,975), so the
+    /// total alone is the least wrong answer there. The parts are used only
+    /// when the call reports no total at all.
     #[must_use]
     pub fn prompt(self) -> u64 {
+        if self.total > self.output {
+            return self.total - self.output;
+        }
+        if self.total > 0 {
+            return self.total;
+        }
         self.input + self.cache_read + self.cache_write
     }
 }
@@ -459,6 +483,7 @@ fn parse_usage(value: &Value) -> Option<Usage> {
         output: number("output"),
         cache_read: number("cacheRead"),
         cache_write: number("cacheWrite"),
+        total: number("totalTokens"),
         cost,
     })
 }
@@ -528,8 +553,70 @@ mod tests {
             panic!("assistant")
         };
         let usage = usage.expect("usage");
-        assert_eq!(usage.prompt(), 105, "prompt includes the cached prefix");
+        assert_eq!(
+            usage.prompt(),
+            105,
+            "without totalTokens the parts are summed, cached prefix included"
+        );
         assert!((usage.cost - 0.5).abs() < f64::EPSILON);
+    }
+
+    /// Streamed turns on this machine sometimes report parts inflated by
+    /// orders of magnitude while `totalTokens` stays sane. Trusting the sum
+    /// produced a 92M-token "peak prompt" on a session whose real ceiling is
+    /// ~370k, and every derived number inherited it.
+    #[test]
+    fn inflated_parts_do_not_become_an_inflated_prompt() {
+        let value = json!({
+            "type": "message",
+            "id": "e3",
+            "parentId": "e2",
+            "timestamp": "2026-01-01T00:00:03.000Z",
+            "message": {
+                "role": "assistant",
+                "content": [{"type": "text", "text": "hi"}],
+                "usage": {
+                    "input": 1541032, "cacheRead": 61140224, "cacheWrite": 0,
+                    "output": 344594, "totalTokens": 33545,
+                }
+            }
+        });
+        let entry = parse_entry(&value).expect("entry parses");
+        let Kind::Assistant { usage, .. } = entry.kind else {
+            panic!("assistant")
+        };
+        let usage = usage.expect("usage");
+        assert_eq!(
+            usage.prompt(),
+            33_545,
+            "output is inflated too, so the total is the only usable field"
+        );
+    }
+
+    /// A healthy row: totalTokens is prompt + output, so the prompt is the
+    /// total minus the generated part.
+    #[test]
+    fn total_tokens_is_preferred_over_the_parts() {
+        let value = json!({
+            "type": "message",
+            "id": "e4",
+            "parentId": "e3",
+            "timestamp": "2026-01-01T00:00:04.000Z",
+            "message": {
+                "role": "assistant",
+                "content": [{"type": "text", "text": "hi"}],
+                "usage": {
+                    "input": 106764, "cacheRead": 809216, "cacheWrite": 0,
+                    "output": 8439, "totalTokens": 157819,
+                }
+            }
+        });
+        let entry = parse_entry(&value).expect("entry parses");
+        let Kind::Assistant { usage, .. } = entry.kind else {
+            panic!("assistant")
+        };
+        let usage = usage.expect("usage");
+        assert_eq!(usage.prompt(), 149_380, "157819 - 8439");
     }
 
     #[test]

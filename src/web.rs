@@ -16,10 +16,10 @@ use crate::session::Session;
 #[must_use]
 pub fn list_row(session: &Session) -> Value {
     let leaf = session.default_leaf().unwrap_or_default();
-    let (peak, newest) = if leaf.is_empty() {
-        (0, 0)
+    let (peak, peak_at, newest) = if leaf.is_empty() {
+        (0, 0, 0)
     } else {
-        session.prompt_extremes(leaf)
+        session.prompt_peak(leaf)
     };
     let fixed = if leaf.is_empty() {
         None
@@ -38,6 +38,7 @@ pub fn list_row(session: &Session) -> Value {
         "entries": session.entries.len(),
         "compactions": session.compaction_count(),
         "peak": peak,
+        "peakAt": peak_at,
         "newest": newest,
         "fixed": fixed.map(|value| value.tokens),
         "fixedMeasured": fixed.map(|value| value.measured),
@@ -73,6 +74,7 @@ pub fn detail(session: &Session, leaf_id: Option<&str>) -> Value {
 
     let assembly = assemble(session, &leaf);
     let fixed = overhead(session, &leaf);
+    let (peak, peak_at, newest) = session.prompt_peak(&leaf);
     let total_tokens = assembly.total_tokens();
 
     let components: Vec<Value> = assembly
@@ -197,6 +199,12 @@ pub fn detail(session: &Session, leaf_id: Option<&str>) -> Value {
             "measured": fixed.measured,
             "samples": fixed.samples,
         },
+        // Provider-reported prompts on this branch. `peak` answers "how close
+        // did this session get to the ceiling"; `newest` is the last one the
+        // provider actually billed, which the composition above reconstructs.
+        "peak": peak,
+        "peakAt": peak_at,
+        "newest": newest,
         "prompt": {
             "components": components,
             "tools": tools,

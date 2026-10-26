@@ -37,16 +37,53 @@ main{display:grid;grid-template-columns:360px 1fr;height:calc(100vh - 57px)}
 .card{background:var(--panel);border:1px solid var(--line);border-radius:10px;
   padding:14px 16px;margin-bottom:16px}
 .card h2{font-size:13px;margin:0 0 12px;font-weight:600;color:var(--dim);
-  text-transform:uppercase;letter-spacing:.06em}
-.grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:12px}
-.stat{min-width:0}
-.stat .k{color:var(--dim);font-size:11px}
-.stat .v{font-size:19px;font-weight:600;font-variant-numeric:tabular-nums}
-.stat .v small{font-size:12px;color:var(--dim);font-weight:400}
-/* A cwd can be a long absolute path; it must wrap inside its cell instead of
-   stretching the grid track and overlapping the neighbour. */
-.stat .v.path{font-size:12px;font-weight:400;line-height:1.35;
-  overflow-wrap:anywhere;word-break:break-word}
+  text-transform:uppercase;letter-spacing:.06em;display:flex;align-items:baseline;gap:8px}
+/* Column names change meaning across tools; a small marker next to the title
+   is where a reader looks for "what does 保留尾 actually count". */
+.q{display:inline-flex;align-items:center;justify-content:center;
+  width:15px;height:15px;border-radius:50%;border:1px solid var(--line);
+  color:var(--dim);font-size:10px;font-weight:600;cursor:help;
+  letter-spacing:0;text-transform:none;flex:0 0 auto;position:relative;top:-1px}
+.q:hover,.q.on{border-color:var(--accent);color:var(--fg);background:var(--panel2)}
+/* Overview: three headline numbers, then a facts row. Six equal cells read as
+   a table of unrelated values; the three that answer "how big is the prompt /
+   how close to the ceiling / how long has this run" are what the card is for,
+   so they get the size and the rest falls back to a quiet row. */
+.ov-hero{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));
+  border:1px solid var(--line);border-radius:8px;background:var(--panel2);overflow:hidden}
+.ov-hero>div{padding:10px 14px 11px;min-width:0}
+.ov-hero>div+div{border-left:1px solid var(--line)}
+.ov-hero .k{color:var(--dim);font-size:11px;letter-spacing:.02em}
+.ov-hero .v{font-size:23px;font-weight:600;line-height:1.25;
+  font-variant-numeric:tabular-nums;display:flex;align-items:baseline;gap:6px}
+.ov-hero .v small{font-size:12px;color:var(--dim);font-weight:400}
+.ov-hero .v .u{font-size:15px}
+.ov-hero .sub{color:var(--dim);font-size:11px;margin-top:2px;
+  font-variant-numeric:tabular-nums;white-space:nowrap;overflow:hidden;
+  text-overflow:ellipsis}
+/* Share meters. Same colours as the donut, so 正文 and 固定开销 are recognisable
+   across the two cards without a second legend. */
+.meter{height:5px;border-radius:3px;background:rgba(0,0,0,.4);
+  display:flex;overflow:hidden;margin-top:7px}
+.meter i{display:block;height:100%}
+.ov-facts{display:grid;grid-template-columns:repeat(auto-fit,minmax(132px,1fr));
+  gap:11px 22px;margin-top:14px;padding-top:13px;border-top:1px solid var(--line)}
+.ov-facts .f{min-width:0}
+.ov-facts .k{color:var(--dim);font-size:11px}
+.ov-facts .v{font-size:15px;font-weight:600;font-variant-numeric:tabular-nums;
+  line-height:1.3}
+.ov-facts .v small{color:var(--dim);font-weight:400;font-size:11px}
+/* Each fact's qualifier is its own line: "229 平均 243 轮/次" on one row reads
+   as one number followed by debris. */
+.ov-facts .sub{color:var(--dim);font-size:11px;font-variant-numeric:tabular-nums;
+  margin-top:1px;overflow-wrap:anywhere}
+/* A cwd is a long absolute path; it gets its own line and wraps there instead
+   of stretching one grid track and overlapping its neighbour. */
+.ov-cwd{display:flex;gap:10px;align-items:baseline;margin-top:11px;
+  padding-top:10px;border-top:1px solid var(--line);min-width:0}
+.ov-cwd .k{color:var(--dim);font-size:11px;flex:0 0 auto}
+.ov-cwd .v{font-family:ui-monospace,Consolas,monospace;font-size:12px;
+  overflow-wrap:anywhere;word-break:break-word;min-width:0}
 table{width:100%;border-collapse:collapse;font-variant-numeric:tabular-nums}
 th,td{text-align:right;padding:5px 8px;font-size:12px;border-bottom:1px solid var(--line)}
 th:first-child,td:first-child{text-align:left}
@@ -205,6 +242,17 @@ function when(ms) {
   const pad = (x) => String(x).padStart(2, "0");
   return `${pad(d.getMonth()+1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
 }
+/// Durations read as a magnitude, not a timestamp: 17.1 天 is a size, and it
+/// is the only way to compare two sessions' lifespans at a glance.
+function dur(ms) {
+  if (ms == null || ms < 0) return "—";
+  const min = 60000, hour = 3600000, day = 86400000;
+  if (ms < hour) return Math.max(1, Math.round(ms / min)) + " 分钟";
+  if (ms < day) return (ms / hour).toFixed(1) + " 小时";
+  if (ms < day * 60) return (ms / day).toFixed(1) + " 天";
+  return Math.round(ms / day) + " 天";
+}
+
 function whenFull(ms) {
   if (!ms) return "—";
   const d = new Date(ms);
@@ -287,30 +335,80 @@ function renderDetail(d) {
   if (d.error) { $("detail").innerHTML = '<p class="muted">' + esc(d.error) + "</p>"; return; }
   const parts = [];
 
-  // Summary stats
+  // Summary stats. Three numbers carry the card — prompt size, how much of it
+  // is transcript, and how close the session got to the ceiling — so they get
+  // the hero row. Everything else is a fact about the file, and reads better
+  // as one quiet line than as six equal cells.
   const accuracy = d.accuracy;
   const acc = accuracy
-    ? `<span class="pill ${accuracy.median < 0.1 ? "ok" : "warn"}">误差中位 ${pct(accuracy.median)}</span>`
-    : '<span class="pill">无实测点</span>';
-  const fixed = d.fixed.measured
-    ? `<span class="pill ok">固定 ${num(d.fixed.tokens)} (${d.fixed.samples} 点实测)</span>`
-    : `<span class="pill warn">固定 ${num(d.fixed.tokens)} (假设值)</span>`;
+    ? `<span class="pill ${accuracy.median < 0.1 ? "ok" : "warn"}"
+        title="每次压缩后重放上下文估算出的 prompt，与下一次真实调用上报的 prompt 相比">误差中位 ${pct(accuracy.median)}</span>`
+    : '<span class="pill" title="这个会话没有可用的实测 prompt">无实测点</span>';
+  const fixedPill = d.fixed.measured
+    ? `<span class="pill ok" title="从 ${num(d.fixed.samples)} 个压缩点反推：实测 prompt 减去重放出的正文">固定 ${num(d.fixed.tokens)} · ${num(d.fixed.samples)} 点实测</span>`
+    : `<span class="pill warn" title="没有实测点可用，这是假设值">固定 ${num(d.fixed.tokens)} · 假设值</span>`;
 
-  parts.push(`<div class="card"><h2>概览</h2><div class="grid">
-    <div class="stat"><div class="k">当前 prompt</div>
-      <div class="v">${num(d.prompt.fullTokens)} <small>tokens</small></div></div>
-    <div class="stat"><div class="k">其中正文</div>
-      <div class="v">${num(d.prompt.contentTokens)} <small>tokens</small></div></div>
-    <div class="stat"><div class="k">压缩次数</div>
-      <div class="v">${num(d.timeline.length)}</div></div>
-    <div class="stat"><div class="k">分支条目</div>
-      <div class="v">${num(d.branchEntries)}
-      <small>/ ${num(d.entries)}</small></div></div>
-    <div class="stat"><div class="k">工作目录</div>
-      <div class="v path mono">${esc(d.cwd)}</div></div>
-    <div class="stat"><div class="k">时间跨度</div>
-      <div class="v" style="font-size:13px">${when(d.firstAt)} → ${when(d.lastAt)}</div></div>
-  </div><div class="legend">${acc} ${fixed}</div></div>`);
+  const full = d.prompt.fullTokens || 0;
+  const content = d.prompt.contentTokens || 0;
+  const fixedTokens = d.fixed.tokens || 0;
+  const contentShare = full ? content / full : 0;
+  const fixedShare = full ? fixedTokens / full : 0;
+  const spanMs = d.lastAt && d.firstAt ? d.lastAt - d.firstAt : 0;
+  const perCompaction = d.timeline.length ? d.branchEntries / d.timeline.length : 0;
+
+  parts.push(`<div class="card"><h2>概览</h2>
+    <div class="ov-hero">
+      <div>
+        <div class="k">当前 prompt</div>
+        <div class="v">${num(full)} <small>tokens</small></div>
+        <div class="sub">正文 ${num(content)} + 固定 ${num(fixedTokens)}</div>
+      </div>
+      <div>
+        <div class="k">其中正文
+          <span class="muted">占 ${pct(contentShare)}</span></div>
+        <div class="v">${num(content)} <small class="u">tokens</small></div>
+        <div class="meter" title="正文 ${pct(contentShare)}，固定开销 ${pct(fixedShare)}">
+          <i style="width:${(contentShare * 100).toFixed(2)}%;background:var(--accent)"></i>
+          <i style="width:${(fixedShare * 100).toFixed(2)}%;background:#5c5670"></i>
+        </div>
+      </div>
+      <div>
+        <div class="k">实测峰值
+          <span class="muted">provider 上报</span></div>
+        <div class="v">${d.peak ? num(d.peak) : "—"} <small class="u">tokens</small></div>
+        <div class="sub">${d.peakAt ? "出现于 " + whenFull(d.peakAt).slice(5, 16) : "无实测"}${
+          d.peak && d.newest ? ` · 最近 ${num(d.newest)}` : ""}</div>
+      </div>
+    </div>
+
+    <div class="ov-facts">
+      <div class="f"><div class="k">存在时长</div>
+        <div class="v">${spanMs ? dur(spanMs) : "—"}</div>
+        <div class="sub">${when(d.firstAt)} → ${when(d.lastAt)}</div></div>
+      <div class="f"><div class="k">压缩</div>
+        <div class="v">${num(d.timeline.length)} <small>次</small></div>
+        <div class="sub">平均 ${num(Math.round(perCompaction))} 轮/次</div></div>
+      <div class="f"><div class="k">条目</div>
+        <div class="v">${num(d.branchEntries)}</div>
+        <div class="sub">${d.branchEntries !== d.entries
+          ? `全文件 ${num(d.entries)}` : "整条分支"}</div></div>
+      <div class="f"><div class="k">文件大小</div>
+        <div class="v">${bytes(d.bytes)}</div>
+        <div class="sub">${d.entries ? num(Math.round(d.bytes / d.entries)) + " B/条" : ""}</div></div>
+      <div class="f"><div class="k">分支</div>
+        <div class="v">${num(d.branches)}</div>
+        <div class="sub">${d.branches > 1 ? "按最新叶子展示" : "无分叉"}</div></div>
+      <div class="f"><div class="k">CJK 占比</div>
+        <div class="v">${content ? pct(d.prompt.components.reduce((a, c) => a + (c.cjk || 0), 0) /
+          Math.max(1, d.prompt.components.reduce((a, c) => a + (c.chars || 0), 0))) : "—"}</div>
+        <div class="sub">影响 token 估算</div></div>
+    </div>
+
+    <div class="ov-cwd"><span class="k">工作目录</span>
+      <span class="v">${esc(d.cwd)}</span></div>
+    <div class="legend">${acc} ${fixedPill}
+      ${d.skippedLines ? `<span class="pill warn">跳过 ${num(d.skippedLines)} 行（无法解析）</span>` : ""}</div>
+  </div>`);
 
   // Composition. A donut over the *whole* prompt: content components plus the
   // fixed overhead. The old stacked bar only covered content, so the ~11% you
@@ -390,15 +488,22 @@ function renderDetail(d) {
   parts.push(`<div class="card"><h2>压缩明细
       <span class="muted" style="text-transform:none;letter-spacing:0">共 ${num(d.timeline.length)} 次</span></h2>
     <div class="tablewrap"><table><thead><tr>
-      <th>时间</th><th>压缩前</th><th>压缩后</th><th>保留尾</th><th>notice</th><th>副本</th><th>间隔轮数</th>
+      <th>时间</th>
+      <th>压缩前 <span class="q" data-q="before">?</span></th>
+      <th>压缩后 <span class="q" data-q="after">?</span></th>
+      <th>保留尾 <span class="q" data-q="retained">?</span></th>
+      <th>notice <span class="q" data-q="notice">?</span></th>
+      <th>副本 <span class="q" data-q="copies">?</span></th>
+      <th>间隔轮数 <span class="q" data-q="turns">?</span></th>
     </tr></thead><tbody id="timeline-body"></tbody></table></div>
     <p class="hint">倒序排列，最新在上。「间隔轮数」小于 10 表示在连环压缩——这是要排查的形态。
       悬停图表上的点或这里的任意一行，看这一次压缩的完整信息：压掉了多少、保留了多少、
-      估算与实测差多少。「压掉」为负说明这次压缩让 prompt 变大了。</p>
+      估算与实测差多少。点列名旁的小问号看这一列到底在数什么。</p>
   </div>`);
 
   $("detail").innerHTML = parts.join("");
   setupComposition(d, compItems);
+  setupColumnHelp();
   setupTimeline(d.timeline);
   setupTimelineHover(d);
 }
@@ -712,6 +817,92 @@ function setupComposition(d, items) {
       el.addEventListener("mouseleave", hideTip);
       el.addEventListener("click", () => openViewer(items[index]));
     }
+  }
+}
+
+// ------------------------------------------------------------------- glossary
+
+/// Column help. The table names come from the assembler's internals and change
+/// meaning from one analyzer to the next — "保留尾" is not "everything kept",
+/// it is what survives after subtracting the summary and the notice — so each
+/// one gets a sentence rather than a tooltip that repeats the header.
+const COLUMN_HELP = {
+  before: {
+    title: "压缩前",
+    body: `这次压缩发生时，provider 在压缩前最后一次上报的 prompt token 数
+      （input + cache_read + cache_write）。它来自会话文件里的 usage 字段，
+      是实测值，不是估算——所以它是判断"是不是把上下文用满了"的唯一硬数字。`,
+  },
+  after: {
+    title: "压缩后",
+    body: `压缩之后第一次真实调用时 provider 上报的 prompt。
+      会话文件里没有"压缩完成瞬间"的记录，所以这一列取的是下一次 assistant 调用
+      的 usage；这一次调用本身也带着新的用户消息，因此它比压缩真正留下的内容略大。
+      「—」表示这个压缩之后没有可用的实测点（会话在这里结束，或之后的调用没写 usage）。`,
+  },
+  retained: {
+    title: "保留尾",
+    body: `压缩把上下文切成两段：一段被摘要替代，一段原样留着。这一列是留下的那段
+      在重放时的 token 数——但已经扣掉了摘要本身和重复注入的 ipython_state 通知，
+      因为那两块分别记在别处。所以它不是"压缩后的 prompt"，而是"除摘要之外还剩多少历史"。
+      压缩后 − 保留尾 ≈ 摘要 + 通知 + 新消息。`,
+  },
+  notice: {
+    title: "notice",
+    body: `被重复注入的 ipython_state 消息所占的 token。kernel 每次执行后会把状态
+      再贴一遍，压缩点越密，攒下的副本越多。这一列大，说明上下文在被同一段内容反复占用。`,
+  },
+  copies: {
+    title: "副本",
+    body: `这个压缩点上，ipython_state 消息一共有几份。正常是 1；大于 1 表示
+      kernel 状态的旧副本没有被清掉，一直在随上下文走。`,
+  },
+  turns: {
+    title: "间隔轮数",
+    body: `距离上一次压缩，中间过了多少轮 assistant 调用。小于 10 就是在连环压缩：
+      上一轮刚压完，几轮之后又满了，通常是某一次工具输出或某条注入消息特别大。
+      这是排查上下文膨胀的第一个筛选条件。`,
+  },
+};
+
+/// Collapsing a template's indentation must not insert a space between two
+/// Chinese characters: "留下的那段 在重放时" reads as a typo, not as layout.
+function oneLine(text) {
+  const cjk = /[\u3040-\u9fff\uff00-\uffef]/;
+  const parts = String(text).split(/\s*\n\s*/);
+  let out = parts[0];
+  for (let i = 1; i < parts.length; i++) {
+    const before = out[out.length - 1] || "";
+    const after = parts[i][0] || "";
+    out += (cjk.test(before) && cjk.test(after) ? "" : " ") + parts[i];
+  }
+  return out.trim();
+}
+
+function columnTipHTML(key) {
+  const help = COLUMN_HELP[key];
+  if (!help) return "";
+  return `<div class="h">${esc(help.title)}</div>
+    <div class="n" style="border:0;padding-top:0;margin-top:0;max-width:300px;
+      font-size:12px;line-height:1.65;color:var(--fg)">${esc(oneLine(help.body))}</div>`;
+}
+
+function setupColumnHelp() {
+  dismissTipOnScroll();
+  for (const el of document.querySelectorAll("#detail .q")) {
+    const key = el.dataset.q;
+    el.addEventListener("mouseenter", (event) => {
+      el.classList.add("on");
+      showTip(columnTipHTML(key), event, () => el.classList.remove("on"));
+    });
+    el.addEventListener("mousemove", (event) => placeTip(event));
+    el.addEventListener("mouseleave", hideTip);
+    // A click pins nothing, but it makes the box reachable for anyone who
+    // cannot hover, and matches what the "?" looks like it does.
+    el.addEventListener("click", (event) => {
+      el.classList.add("on");
+      showTip(columnTipHTML(key), event, () => el.classList.remove("on"));
+    });
   }
 }
 
