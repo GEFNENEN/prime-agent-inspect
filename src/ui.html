@@ -101,7 +101,11 @@ const PALETTE = ["#8b7fd4","#d4896a","#6fbf8b","#d9b45e","#6aa9d4","#d46a9f","#9
 
 /// How many compactions to show. 0 means all; anything else keeps the newest N,
 /// which is what you want when a session has 200+ of them.
-const RECENT_DEFAULT = 10;
+/// 50 is the default because the interesting part of a timeline is the recent
+/// shape, not the whole history — and it still fits on one screen.
+const RECENT_DEFAULT = 50;
+/// Persisted in localStorage, which is per-origin: it survives page reloads and
+/// server restarts, but is not shared with another browser or another port.
 const RECENT_KEY = "prime-agent-inspect.recent";
 
 const state = {
