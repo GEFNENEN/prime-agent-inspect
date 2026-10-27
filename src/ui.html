@@ -262,8 +262,8 @@ canvas{width:100%;height:auto;display:block}
   <div id="side">
     <div id="filter">
       <label for="minturns">≥ 轮</label>
-      <input id="minturns" type="number" min="1" step="1" inputmode="numeric" value="1"
-        title="只显示对话轮数不少于这个值的会话；填 1 就是全部">
+      <input id="minturns" type="number" min="0" step="1" inputmode="numeric" value="1"
+        title="只显示对话轮数不少于这个值的会话；0 = 不过滤，显示全部会话">
       <span id="filter-note"></span>
     </div>
     <div id="list"></div>
@@ -285,9 +285,10 @@ const RECENT_DEFAULT = 50;
 /// server restarts, but is not shared with another browser or another port.
 const RECENT_KEY = "prime-agent-inspect.recent";
 
-/// Minimum turns a session needs to appear in the list. 1 means "everything
-/// with a conversation"; the sidebar holds 119 sessions, most of them empty
-/// shells, and they bury the handful that matter.
+/// Minimum turns a session needs to appear in the list. 0 is special: it means
+/// no filter at all, including the ~77 files that hold only metadata rows.
+/// The default is 1 because those shells otherwise bury the handful of
+/// sessions worth reading.
 const MIN_TURNS_KEY = "prime-agent-inspect.minTurns";
 const MIN_TURNS_DEFAULT = 1;
 
@@ -1232,7 +1233,7 @@ function loadMinTurns() {
   try {
     const raw = window.localStorage.getItem(MIN_TURNS_KEY);
     const value = raw == null ? NaN : Number.parseInt(raw, 10);
-    if (Number.isFinite(value) && value >= 1) return value;
+    if (Number.isFinite(value) && value >= 0) return value;
   } catch (_) { /* blocked storage: the default is fine */ }
   return MIN_TURNS_DEFAULT;
 }
@@ -2017,7 +2018,7 @@ function setupFilter() {
   input.value = String(state.minTurns);
   const apply = () => {
     const value = Number.parseInt(input.value, 10);
-    state.minTurns = Number.isFinite(value) && value >= 1 ? value : MIN_TURNS_DEFAULT;
+    state.minTurns = Number.isFinite(value) && value >= 0 ? value : MIN_TURNS_DEFAULT;
     input.value = String(state.minTurns);
     saveMinTurns(state.minTurns);
     renderList();
