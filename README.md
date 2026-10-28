@@ -30,6 +30,25 @@ prime-agent-inspect check  <session.jsonl>           # 估算与实测的偏差
 
 **推荐用 `serve`**。命令行适合脚本和快速核对，日常排查用浏览器更顺手：列表可点、曲线可看、刷新即重新快照。
 
+### 让它在后台跑
+
+`serve` 是前台进程，终端关掉就没了。要它在后台常驻、并且开机自启，用一个启动快捷方式即可
+（Windows，放到「启动」目录；`0` 表示不弹窗口）：
+
+```vbs
+' %APPDATA%\Microsoft\Windows\Start Menu\Programs\Startup\prime-agent-inspect.vbs
+Dim shell, cmd
+Set shell = CreateObject("WScript.Shell")
+cmd = "cmd /c """"C:\Users\1\.local\bin\prime-agent-inspect.exe"" serve ""C:\Users\1\.prime\agent\sessions"" > ""C:\Users\1\.local\state\prime-agent-inspect.serve.log"" 2>&1"""
+shell.Run cmd, 0, False
+```
+
+删掉这个 `.vbs` 就是关闭自启。排查日志看它重定向的那个文件；进程存活用
+`netstat -ano | grep ":7700"` 查监听者 pid，要停就用 `taskkill /F /PID <pid>`。
+
+服务只绑 `127.0.0.1`，不对外。它会一边读会话文件一边缓存解析结果，
+所以同一个端口上跑两份只会重复占内存。
+
 ### 内存占用
 
 不保留正文，只记字符数与类型。p8 的 53,731 条目约 10 MB；全库 418 MB 在内存里是几十 MB 量级。服务器本身是单线程 + 一个 TCP 监听，几百 KB。
