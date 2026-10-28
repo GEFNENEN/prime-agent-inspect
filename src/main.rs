@@ -75,6 +75,18 @@ fn run(args: &[String]) -> Result<(), String> {
     }
 }
 
+/// Serialize a payload, turning a serialization failure into a 500 instead of
+/// panicking inside the accept loop.
+fn json_response(body: &serde_json::Value) -> prime_agent_inspect::http::Response {
+    match serde_json::to_string(body) {
+        Ok(text) => prime_agent_inspect::http::Response::json(text),
+        Err(error) => prime_agent_inspect::http::Response::text(
+            500,
+            &format!("cannot serialize: {error}"),
+        ),
+    }
+}
+
 fn flag_value(args: &[String], flag: &str) -> Option<String> {
     args.iter()
         .position(|arg| arg == flag)
@@ -90,12 +102,12 @@ fn serve(dir: &Path, port: u16, open: bool) -> Result<(), String> {
     let address = std::net::SocketAddr::from(([127, 0, 0, 1], port));
     let shown = root.clone();
     let cache = Arc::new(prime_agent_inspect::cache::Cache::new());
+    let global_roots = prime_agent_inspect::global_state::Roots::discover(&root);
+    let global_sizes = Arc::new(prime_agent_inspect::global_state::SizeCache::new());
 
-    let handler = move |target: &str| -> prime_agent_inspect::http::Response {
-        let (path, query) = match target.split_once('?') {
-            Some((path, query)) => (path, query),
-            None => (target, ""),
-        };
+    let handler = move |request: &prime_agent_inspect::http::Request| -> prime_agent_inspect::http::Response {
+        let path = request.path();
+        let query = request.query();
         match path {
             "/" | "/index.html" => prime_agent_inspect::http::Response::html(include_str!("ui.html")),
             "/api/sessions" => match list_payload(&root, &cache) {
@@ -168,6 +180,65 @@ fn serve(dir: &Path, port: u16, open: bool) -> Result<(), String> {
             "/api/drop-cache" => {
                 cache.clear();
                 prime_agent_inspect::http::Response::json("{\"ok\":true}".to_string())
+            }
+            "/api/global" => {
+                let fresh = query_value(query, "fresh").is_some();
+                let body = prime_agent_inspect::global_state::overview(
+                    &global_roots,
+                    &global_sizes,
+                    fresh,
+                );
+                json_response(&body)
+            }
+            "/api/global/entry" => {
+                let kind = query_value(query, "kind").unwrap_or_default();
+                let id = query_value(query, "id").unwrap_or_default();
+                let body = prime_agent_inspect::global_state::entry_text(&global_roots, &kind, &id);
+                json_response(&body)
+            }
+            "/api/global/skill" => {
+                let source = query_value(query, "source").unwrap_or_default();
+                let name = query_value(query, "name").unwrap_or_default();
+                match prime_agent_inspect::global_state::skill_text(&global_roots, &source, &name) {
+                    Ok(body) => json_response(&body),
+                    Err(error) => prime_agent_inspect::http::Response::text(404, &error),
+                }
+            }
+            "/api/global/file" => {
+                let name = query_value(query, "name").unwrap_or_default();
+                match prime_agent_inspect::global_state::file_text(&global_roots, &name) {
+                    Ok(body) => json_response(&body),
+                    Err(error) => prime_agent_inspect::http::Response::text(400, &error),
+                }
+            }
+            "/api/global/save" => {
+                if request.method != "POST" {
+                    return prime_agent_inspect::http::Response::text(405, "POST only");
+                }
+                match serde_json::from_slice::<serde_json::Value>(&request.body) {
+                    Ok(body) => {
+                        let name = body.get("name").and_then(|v| v.as_str()).unwrap_or_default();
+                        let text = body.get("text").and_then(|v| v.as_str()).unwrap_or_default();
+                        match prime_agent_inspect::global_state::save_file(&global_roots, name, text) {
+                            Ok(result) => json_response(&result),
+                            Err(error) => prime_agent_inspect::http::Response::text(400, &error),
+                        }
+                    }
+                    Err(error) => prime_agent_inspect::http::Response::text(
+                        400,
+                        &format!("请求体不是合法 JSON: {error}"),
+                    ),
+                }
+            }
+            "/api/global/log" => {
+                let name = query_value(query, "name").unwrap_or_default();
+                let lines = query_value(query, "lines")
+                    .and_then(|value| value.parse::<usize>().ok())
+                    .unwrap_or(300);
+                match prime_agent_inspect::global_state::log_tail(&global_roots, &name, lines) {
+                    Ok(body) => json_response(&body),
+                    Err(error) => prime_agent_inspect::http::Response::text(404, &error),
+                }
             }
             "/favicon.ico" => prime_agent_inspect::http::Response {
                 status: 204,

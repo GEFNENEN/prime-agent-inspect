@@ -8,6 +8,7 @@
 pub mod cache;
 pub mod calibrate;
 pub mod context;
+pub mod global_state;
 pub mod model;
 pub mod overhead;
 pub mod session;

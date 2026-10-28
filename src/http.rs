@@ -12,8 +12,37 @@ use std::sync::Arc;
 
 use crate::session::load;
 
-/// Request handler: path plus query, returning `(status, content type, body)`.
-pub type Handler = Arc<dyn Fn(&str) -> Response + Send + Sync>;
+/// One parsed request. The body is only read for POST: the UI has exactly one
+/// write operation (saving a config file), and reading bodies on GET would be
+/// dead code with a size limit to get wrong.
+pub struct Request {
+    pub method: String,
+    /// Path plus query, exactly as it arrived.
+    pub target: String,
+    pub body: Vec<u8>,
+}
+
+impl Request {
+    /// Path without the query string.
+    #[must_use]
+    pub fn path(&self) -> &str {
+        self.target.split_once('?').map_or(self.target.as_str(), |(path, _)| path)
+    }
+
+    /// Query without the path.
+    #[must_use]
+    pub fn query(&self) -> &str {
+        self.target.split_once('?').map_or("", |(_, query)| query)
+    }
+}
+
+/// Request handler: the parsed request, returning `(status, content type, body)`.
+pub type Handler = Arc<dyn Fn(&Request) -> Response + Send + Sync>;
+
+/// Refuse a body larger than this. The largest thing anyone saves here is
+/// models.json at ~20 KB; a megabyte is already generous, and the limit keeps a
+/// runaway client from making the single-threaded server allocate without bound.
+const MAX_BODY: usize = 4 * 1024 * 1024;
 
 pub struct Response {
     pub status: u16,
@@ -80,19 +109,37 @@ fn handle(mut stream: TcpStream, handler: &Handler) {
     if reader.read_line(&mut request_line).is_err() {
         return;
     }
-    // Drain the headers so the client's write completes.
+    // Headers: drain them, keeping Content-Length so a POST body can be read.
+    let mut content_length = 0_usize;
     loop {
         let mut line = String::new();
         match reader.read_line(&mut line) {
             Ok(0) => break,
             Ok(_) if line.trim().is_empty() => break,
-            Ok(_) => {}
+            Ok(_) => {
+                if let Some((name, value)) = line.split_once(':') {
+                    if name.eq_ignore_ascii_case("content-length") {
+                        content_length = value.trim().parse().unwrap_or(0);
+                    }
+                }
+            }
             Err(_) => break,
         }
     }
 
-    let target = request_line.split_whitespace().nth(1).unwrap_or("/");
-    let response = handler(target);
+    let mut parts = request_line.split_whitespace();
+    let method = parts.next().unwrap_or("GET").to_string();
+    let target = parts.next().unwrap_or("/").to_string();
+    let mut body = Vec::new();
+    if content_length > 0 && content_length <= MAX_BODY {
+        use std::io::Read;
+        body.resize(content_length, 0);
+        if reader.read_exact(&mut body).is_err() {
+            body.clear();
+        }
+    }
+    let request = Request { method, target, body };
+    let response = handler(&request);
     let _ = stream.write_all(
         format!(
             "HTTP/1.1 {} {}\r\nContent-Type: {}\r\nContent-Length: {}\r\nCache-Control: no-store\r\nConnection: close\r\n\r\n",

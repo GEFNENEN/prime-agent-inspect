@@ -247,17 +247,110 @@ canvas{width:100%;height:auto;display:block}
   text-transform:uppercase;margin:6px 0 3px}
 .ent .cut{color:var(--warn);font-size:11px;margin-top:4px}
 .sheet .empty{color:var(--dim);padding:24px 0;text-align:center;font-size:13px}
+
+/* ---------- 顶层页面：会话 / 全局 ---------- */
+#pages{display:flex;gap:2px;background:var(--panel2);border:1px solid var(--line);
+  border-radius:8px;padding:2px}
+#pages button{background:none;border:0;color:var(--dim);padding:5px 14px;
+  border-radius:6px;font-family:inherit;font-size:12.5px;cursor:pointer}
+#pages button:hover{color:var(--fg)}
+#pages button.on{background:var(--accent);color:#14121a;font-weight:600}
+.page{display:none;height:calc(100vh - 57px)}
+.page.on{display:grid;grid-template-columns:1fr}
+#page-global.on{grid-template-columns:196px 1fr}
+#page-sessions main{height:100%}
+#grail{display:flex;flex-direction:column;gap:2px;padding:10px 8px;overflow:auto;
+  border-right:1px solid var(--line);background:var(--panel)}
+#grail button{display:flex;align-items:center;justify-content:space-between;gap:8px;
+  background:none;border:0;color:var(--dim);font-family:inherit;font-size:13px;
+  padding:9px 10px;border-radius:8px;cursor:pointer;text-align:left}
+#grail button:hover{background:var(--panel2);color:var(--fg)}
+#grail button.on{background:var(--panel2);color:var(--fg);box-shadow:inset 2px 0 0 var(--accent)}
+#grail .n{font-size:11px;color:var(--dim);font-variant-numeric:tabular-nums}
+#gbody{overflow:auto;padding:16px 22px 40px}
+.g-hero{display:grid;grid-template-columns:repeat(auto-fit,minmax(158px,1fr));
+  gap:10px;margin-bottom:16px}
+.g-hero .t{background:var(--panel);border:1px solid var(--line);border-radius:10px;
+  padding:12px 14px;min-width:0}
+.g-hero .v{font-size:22px;font-weight:600;line-height:1.15;font-variant-numeric:tabular-nums;
+  overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.g-hero .k{color:var(--dim);font-size:12px;margin-top:3px}
+.g-hero .s{color:var(--dim);font-size:11px;margin-top:5px;overflow:hidden;
+  text-overflow:ellipsis;white-space:nowrap}
+.grow{display:grid;grid-template-columns:1fr 190px 92px;gap:14px;align-items:center;
+  padding:7px 0;border-bottom:1px solid var(--line);font-size:13px;min-width:0}
+.grow:last-child{border-bottom:0}
+.grow .t{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.grow .n{color:var(--dim);font-size:11px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.grow .num{text-align:right;font-variant-numeric:tabular-nums;
+  font-family:ui-monospace,Consolas,monospace;font-size:12px}
+.grow.hot .num{color:var(--warn)}
+.grow.hot .t{color:var(--warn)}
+.g-bar{height:7px;border-radius:4px;background:var(--panel2);overflow:hidden}
+.g-bar span{display:block;height:100%;border-radius:4px;
+  background:linear-gradient(90deg,#5f5490,#8b7fd4)}
+.gm{padding:8px 2px;border-bottom:1px solid var(--line);cursor:pointer;min-width:0}
+.gm:last-child{border-bottom:0}
+.gm:hover{background:var(--panel2)}
+.gm .t{font-size:13px;font-weight:500}
+.gm .m{display:flex;flex-wrap:wrap;gap:10px;align-items:center;color:var(--dim);
+  font-size:11px;margin-top:3px;font-variant-numeric:tabular-nums}
+.gm .h{color:var(--dim);font-size:12px;margin-top:4px;overflow:hidden;
+  display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical}
+.gkind{cursor:pointer;font-family:inherit}
+.gkind.on{background:var(--accent);color:#14121a;border-color:var(--accent)}
+.sk{padding:9px 2px;border-bottom:1px solid var(--line);cursor:pointer}
+.sk:last-child{border-bottom:0}
+.sk:hover{background:var(--panel2)}
+.sk .top{display:flex;gap:8px;align-items:center}
+.sk .nm{font-weight:600;font-size:13px}
+.sk .mt{margin-left:auto;color:var(--dim);font-size:11px;white-space:nowrap;
+  font-variant-numeric:tabular-nums}
+.sk .ds{color:var(--dim);font-size:12px;margin-top:3px;overflow:hidden;
+  display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical}
+details.prov{border-bottom:1px solid var(--line);padding:4px 0}
+details.prov:last-of-type{border-bottom:0}
+details.prov summary{display:flex;gap:10px;align-items:center;cursor:pointer;
+  padding:6px 2px;list-style:none}
+details.prov summary::-webkit-details-marker{display:none}
+details.prov summary::before{content:"▸";color:var(--dim);font-size:11px;width:10px}
+details.prov[open] summary::before{content:"▾"}
+details.prov .pn{font-weight:600;font-size:13px;min-width:110px}
+details.prov .mt{margin-left:auto;color:var(--dim);font-size:11px;white-space:nowrap}
+details.prov .dim{color:var(--dim);font-size:11px;overflow:hidden;
+  text-overflow:ellipsis;white-space:nowrap}
+details.prov table{margin:2px 0 10px 20px;width:calc(100% - 20px)}
+.mini{padding:2px 9px;font-size:11.5px}
+#gbody .card h2{display:flex;align-items:baseline;gap:10px;flex-wrap:wrap}
+.gsec-note{font-size:12px;color:var(--dim);margin:-4px 0 12px}
+#gedit textarea{width:100%;height:min(58vh,540px);background:var(--panel2);color:var(--fg);
+  border:1px solid var(--line);border-radius:8px;padding:10px 12px;
+  font:12px/1.55 ui-monospace,Consolas,monospace;resize:vertical}
+#gedit textarea:focus{outline:1px solid var(--accent)}
+#gedit .status{font-size:12px;color:var(--dim);margin-top:6px;min-height:18px}
+#gedit .status.bad{color:var(--bad)}
+#gedit .status.ok{color:var(--ok)}
+tr.grp td{background:var(--panel2);color:var(--dim);font-size:11px;
+  letter-spacing:.04em;text-transform:uppercase;padding:4px 8px}
+tr.nullrow td{color:var(--dim)}
+.gv{max-width:340px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;display:inline-block;
+  vertical-align:bottom}
 </style>
 </head>
 <body>
 <header>
   <h1>prime-agent-inspect</h1>
+  <nav id="pages" aria-label="顶层页面">
+    <button data-page="sessions" class="on">会话</button>
+    <button data-page="global">全局</button>
+  </nav>
   <span class="path" id="root"></span>
   <span class="spacer"></span>
   <span class="muted" id="stamp"></span>
   <button id="refresh" class="primary">刷新</button>
 </header>
 <div id="status">就绪</div>
+<div id="page-sessions" class="page on">
 <main>
   <div id="side">
     <div id="filter">
@@ -270,6 +363,11 @@ canvas{width:100%;height:auto;display:block}
   </div>
   <div id="detail"><p class="muted">左侧选择一个会话。</p></div>
 </main>
+</div>
+<div id="page-global" class="page">
+  <nav id="grail" aria-label="全局分区"></nav>
+  <div id="gbody"><p class="muted">扫描全局工作区…</p></div>
+</div>
 
 <script>
 "use strict";
@@ -449,6 +547,7 @@ function copyText(text, button) {
 
 async function openSession(id, keepScroll) {
   state.selected = id;
+  if (activePage() === "sessions") history.replaceState(null, "", "#sessions/" + id);
   renderList();
   setStatus("读取会话…");
   try {
@@ -2033,13 +2132,762 @@ function setupFilter() {
   apply();
 }
 
-$("refresh").addEventListener("click", refreshList);
+
+/* ===================== 全局工作区（第二个顶层页面） ===================== */
+
+const PAGE_KEY = "prime-agent-inspect.page";
+const GS_KEY = "prime-agent-inspect.gsection";
+
+const G = {
+  data: null, busy: false,
+  section: localStorage.getItem(GS_KEY) || "overview",
+  kind: "memory", q: "", onlySet: true,
+};
+const gedit = { el: null };
+
+const GSECTIONS = [
+  ["overview", "概览"],
+  ["config", "配置"],
+  ["memory", "记忆"],
+  ["skills", "技能"],
+  ["models", "模型与 MCP"],
+  ["runtime", "运行与日志"],
+];
+
+/// What each settings key does. Written from the behavior visible in this
+/// install; keys whose meaning is not documented locally say so rather than
+/// guessing.
+const SETTINGS_DOC = {
+  defaultProvider: "默认供应商，对应 models.json 里 providers 的一个键。",
+  defaultModel: "默认模型 id，和 defaultProvider 组成 provider/model。",
+  subagentDefaultModel: "子代理默认模型；留空则继承父代理。",
+  auxiliaryModel: "辅助模型，用于摘要、压缩、起标题这类轻任务；留空则用主模型。",
+  imageModel: "看图用的模型；留空则用主模型。",
+  providerBackupModel: "主供应商失败时的备用模型。",
+  defaultThinkingLevel: "默认思考强度：low / medium / high / xhigh / max。越高越慢也越贵。",
+  defaultServiceTier: "服务层级，供应商自定义（例如 priority）。",
+  recentModels: "最近用过的模型，只影响切换器排序，不改默认值。",
+  enabledModels: "启用哪些模型；null = 全部。",
+  allowedModels: "允许使用的模型白名单；null = 不限制。",
+  thinkingBudgets: "按思考等级覆盖 token 预算。",
+  rlmMaxDepth: "子代理最大嵌套深度。5 表示 root 之下还能再套 5 层。",
+  compaction: "自动压缩：enabled 开关、reserveTokens 预留空间、keepRecentTokens 保留最近多少 token、agentCallable 是否允许代理主动触发压缩。",
+  autoRefine: "自动 refine（把经验写回 harness）开关。",
+  branchSummary: "分支摘要设置。",
+  sessionDir: "会话目录覆盖；null = <agent>/sessions。",
+  sessionArchiveMaxAgeDays: "早于 N 天的会话移入归档。",
+  sessionArchiveMaxSessions: "活动目录最多保留多少个会话。",
+  idleEvictionMinutes: "空闲多少分钟后驱逐后台 worker。",
+  transport: "传输层设置。",
+  steeringMode: "回合进行中插话的投递方式。",
+  followUpMode: "回合结束后的追加消息如何投递。",
+  autonomous: "自主模式设置。",
+  retry: "重试策略：次数与退避。",
+  shellPath: "bash 工具使用的 shell 路径。",
+  shellCommandPrefix: "每条 shell 命令前注入的前缀，例如激活 venv。",
+  npmCommand: "npm 命令覆盖，例如换成 pnpm。",
+  terminal: "终端渲染：showImages 显示图片、clearOnShrink 收缩时清屏、showTerminalProgress 进度条、fullscreenMouse 全屏鼠标。",
+  images: "图片输入相关设置。",
+  markdown: "Markdown 渲染：codeBlockIndent 缩进、mermaid 流式渲染模式。",
+  chatDetail: "对话详情默认展开到哪一层。",
+  treeFilterMode: "会话树过滤模式。",
+  editorPaddingX: "编辑器左右留白（字符数）。",
+  autocompleteMaxVisible: "补全菜单最多显示几项。",
+  showHardwareCursor: "显示硬件光标。",
+  hideThinkingBlock: "隐藏思考块。",
+  speedDisplay: "显示生成速度。",
+  mcpServers: "MCP 服务定义：type=http 用 url，type=stdio 用 command/args/env。改完重启生效。",
+  mcpCatalogSources: "MCP 服务目录的来源地址。",
+  packages: "安装的技能包（git 仓库地址）。",
+  extensions: "加载的扩展脚本路径。",
+  prompts: "额外提示词文件或目录。",
+  themes: "额外主题目录。",
+  skills: "技能目录覆盖。",
+  enableSkillCommands: "把技能暴露成 slash 命令。",
+  bundledSkills: "内置技能列表/开关。",
+  enableBuiltinSkills: "是否启用内置技能。",
+  turnHook: "每回合钩子：command 与 timeoutMs。",
+  stopHook: "回合结束钩子：command 与 timeoutMs。",
+  updateGuard: "更新守卫：hold 阻止自动更新，message 是提示语。",
+  telemetry: "遥测：enabled 上报开关、localMirror 本地镜像、noticeShown 提示是否已展示。",
+  agentTraces: "agent trace 记录开关。",
+  factory: "factory（子代理工厂）开关。",
+  theme: "主题名，对应 themes/ 里的文件。",
+  warnings: "警告显示设置。",
+  requestTiming: "请求耗时显示。",
+  onboardingShown: "首次引导是否已展示。",
+  onboardingCompleted: "首次引导是否已完成。",
+  updateChannel: "更新通道（release / beta 等）。",
+  quietStartup: "启动时减少输出。",
+  "npm:billion-context-pi": "npm 包相关的数值记录，0 表示未启用。",
+};
+
+const SETTINGS_GROUP = {
+  defaultProvider: "模型", defaultModel: "模型", subagentDefaultModel: "模型",
+  auxiliaryModel: "模型", imageModel: "模型", providerBackupModel: "模型",
+  defaultThinkingLevel: "模型", defaultServiceTier: "模型", recentModels: "模型",
+  enabledModels: "模型", allowedModels: "模型", thinkingBudgets: "模型",
+  rlmMaxDepth: "会话", sessionDir: "会话", branchSummary: "会话", autonomous: "会话",
+  steeringMode: "会话", followUpMode: "会话", transport: "会话", retry: "会话",
+  compaction: "压缩与改进", autoRefine: "压缩与改进",
+  sessionArchiveMaxAgeDays: "归档", sessionArchiveMaxSessions: "归档",
+  idleEvictionMinutes: "归档",
+  shellPath: "工具与终端", shellCommandPrefix: "工具与终端", npmCommand: "工具与终端",
+  terminal: "工具与终端", images: "工具与终端", markdown: "工具与终端",
+  chatDetail: "界面", treeFilterMode: "界面", editorPaddingX: "界面",
+  autocompleteMaxVisible: "界面", showHardwareCursor: "界面", hideThinkingBlock: "界面",
+  speedDisplay: "界面", theme: "界面", warnings: "界面", requestTiming: "界面",
+  quietStartup: "界面",
+  mcpServers: "MCP 与扩展", mcpCatalogSources: "MCP 与扩展", packages: "MCP 与扩展",
+  extensions: "MCP 与扩展", prompts: "MCP 与扩展", themes: "MCP 与扩展",
+  skills: "MCP 与扩展", enableSkillCommands: "MCP 与扩展", bundledSkills: "MCP 与扩展",
+  enableBuiltinSkills: "MCP 与扩展",
+  turnHook: "钩子", stopHook: "钩子", updateGuard: "钩子",
+  telemetry: "遥测与其他", agentTraces: "遥测与其他", factory: "遥测与其他",
+  onboardingShown: "遥测与其他", onboardingCompleted: "遥测与其他",
+  updateChannel: "遥测与其他", "npm:billion-context-pi": "遥测与其他",
+};
+
+const GROUP_ORDER = ["模型", "会话", "压缩与改进", "归档", "工具与终端", "界面",
+  "MCP 与扩展", "钩子", "遥测与其他", "其他"];
+
+const iso = (t) => (t ? String(t).slice(0, 16).replace("T", " ") : "—");
+
+function ghero(items) {
+  return `<div class="g-hero">${items.map(([value, label, note]) => `<div class="t">
+      <div class="v" title="${esc(String(value))}">${esc(String(value))}</div>
+      <div class="k">${esc(label)}</div>
+      ${note ? `<div class="s" title="${esc(note)}">${esc(note)}</div>` : ""}
+    </div>`).join("")}</div>`;
+}
+
+function gbar(value, max) {
+  const width = Math.max(1.5, (value / Math.max(1, max)) * 100);
+  return `<div class="g-bar"><span style="width:${width.toFixed(1)}%"></span></div>`;
+}
+
+function setPage(page, remember = true) {
+  if (remember) {
+    localStorage.setItem(PAGE_KEY, page);
+    // Also in the hash: a link to the global page is shareable and the
+    // headless probes can jump straight there.
+    // Keep the selected session in the hash so the link still points at it.
+    const suffix = page === "sessions" && state.selected ? "/" + state.selected : "";
+    history.replaceState(null, "", "#" + page + suffix);
+  }
+  document.querySelectorAll("#pages button")
+    .forEach((btn) => btn.classList.toggle("on", btn.dataset.page === page));
+  document.querySelectorAll(".page")
+    .forEach((el) => el.classList.toggle("on", el.id === "page-" + page));
+  if (page === "global" && !G.data) loadGlobal();
+  // A canvas that was hidden has no size; redraw when it comes back.
+  if (page === "sessions" && state.detail) drawChart();
+}
+
+async function loadGlobal(fresh) {
+  if (G.busy) return;
+  G.busy = true;
+  const el = $("gbody");
+  if (!G.data) el.innerHTML = `<p class="muted">扫描全局工作区……首次要统计目录大小，稍等。</p>`;
+  setStatus("扫描全局工作区…");
+  try {
+    G.data = await getJSON("/api/global" + (fresh ? "?fresh=1" : ""));
+    renderGlobal();
+    setStatus(`全局数据：${when(G.data.scannedAt || Date.now())}`);
+  } catch (error) {
+    el.innerHTML = `<p class="muted">读取失败：${esc(error.message || error)}</p>`;
+    setStatus("全局数据读取失败", true);
+  } finally {
+    G.busy = false;
+  }
+}
+
+function renderGlobal() {
+  if (!G.data) return;
+  const d = G.data;
+  const counts = {
+    config: d.files.length,
+    memory: d.counts.memories + d.counts.prompts,
+    skills: d.counts.skills,
+    models: d.counts.models,
+    runtime: d.logs.length,
+  };
+  $("grail").innerHTML = GSECTIONS.map(([id, label]) => {
+    const n = counts[id];
+    return `<button data-gsection="${id}" class="${G.section === id ? "on" : ""}">`
+      + `<span>${label}</span>${n ? `<span class="n">${num(n)}</span>` : ""}</button>`;
+  }).join("");
+  const views = { overview: gOverview, config: gConfig, memory: gMemory,
+    skills: gSkills, models: gModels, runtime: gRuntime };
+  $("gbody").innerHTML = (views[G.section] || gOverview)();
+  if (G.section === "memory") filterMemory();
+}
+
+// ------------------------------------------------------------- 概览
+
+function gOverview() {
+  const d = G.data;
+  const total = d.storage.reduce((sum, row) => sum + row.bytes, 0);
+  const max = Math.max(1, ...d.storage.map((row) => row.bytes));
+  const runs = d.telemetry.runs;
+
+  const notes = [];
+  const loose = d.storage.find((row) => row.kind === "file" && row.name.endsWith(".jsonl"));
+  if (loose) notes.push(["根目录躺着一份会话文件",
+    `${loose.name}（${bytes(loose.bytes)}）不在 sessions/ 里，会话列表看不到它。确认无用后可删。`]);
+  const backups = d.storage.filter((row) => row.name.includes(".bak")).length;
+  if (backups) notes.push([`${backups} 份配置备份`,
+    "每次从这里保存配置都会留一份，单个很小，但会一直累积。"]);
+  if (runs.total) notes.push([`最近 ${runs.total} 次运行中 ${runs.errors} 次以 error 结束`,
+    `p50 时长 ${dur(runs.p50ms)}，最长 ${dur(runs.maxms)}。多半是启动即退出的短会话，点「运行与日志」看细节。`]);
+  if (d.counts.refinements) notes.push([`${d.counts.refinements} 次 refine`,
+    "最近一次：" + iso((d.harness.refinements[0] || {}).created) + "。详见「记忆」。"]);
+
+  const storageRow = (row) => `<div class="grow${row.kind === "file" && row.name.endsWith(".jsonl") ? " hot" : ""}">
+      <div><div class="t" title="${esc(row.name)}">${esc(row.name)}</div>
+        <div class="n">${esc(row.note)}</div></div>
+      <div>${gbar(row.bytes, max)}</div>
+      <div class="num">${bytes(row.bytes)}</div>
+    </div>`;
+  const storage = d.storage.slice(0, 14).map(storageRow).join("");
+  const rest = d.storage.slice(14);
+  const storageMore = rest.length
+    ? `<details><summary class="muted" style="cursor:pointer;padding:8px 0;font-size:12px">
+        其余 ${rest.length} 项（${bytes(rest.reduce((sum, row) => sum + row.bytes, 0))}）</summary>
+        ${rest.map(storageRow).join("")}</details>`
+    : "";
+
+  const refs = (d.harness.refinements || []).slice(0, 5).map((ref) => `<div class="gm" data-refine="${esc(ref.id)}">
+      <div class="t">${esc(ref.trigger)}</div>
+      <div class="m"><span>${iso(ref.created)}</span><span>${(ref.changes || []).length} 处改动</span></div>
+    </div>`).join("") || `<p class="muted">还没有 refine 记录。</p>`;
+
+  const errors = (d.clientErrors || []).slice(-4).reverse()
+    .map((line) => `<div class="n mono" style="padding:3px 0;white-space:pre-wrap">${esc(line)}</div>`).join("")
+    || `<p class="muted">没有客户端错误。</p>`;
+
+  return ghero([
+    [bytes(total), "全局工作区占用", `${d.storage.length} 个目录/文件`],
+    [num(d.counts.sessions), "会话文件", `${d.counts.memories} 条记忆`],
+    [num(d.counts.skills), "技能", `内置 ${d.skills.prime.length} · 用户 ${d.skills.user.length}`],
+    [num(d.counts.models), "模型", `${d.counts.providers} 个供应商`],
+    [num(d.counts.mcp), "MCP 服务", d.mcp.catalog.counts ? `目录 ${d.mcp.catalog.counts.ready}/${d.mcp.catalog.counts.total} 就绪` : ""],
+    [num(runs.total), "遥测运行记录", `${runs.errors} 次 error`],
+  ])
+  + `<div class="card"><h2>磁盘占用
+      <span class="muted" style="text-transform:none;letter-spacing:0">按大小排序 · 共 ${bytes(total)}</span></h2>
+      ${storage}${storageMore}</div>`
+  + `<div class="card"><h2>值得注意</h2>
+      ${notes.map(([title, note]) => `<div class="grow" style="grid-template-columns:1fr">
+        <div><div class="t">${esc(title)}</div><div class="n" style="white-space:normal">${esc(note)}</div></div>
+      </div>`).join("") || `<p class="muted">没有异常。</p>`}</div>`
+  + `<div class="card"><h2>最近的 refine <span class="muted" style="text-transform:none;letter-spacing:0">${d.counts.refinements} 次</span></h2>${refs}</div>`
+  + `<div class="card"><h2>最近的客户端错误</h2>${errors}</div>`;
+}
+
+// ------------------------------------------------------------- 配置
+
+function gvalue(row) {
+  const value = row.value;
+  if (value === null || value === undefined) return `<span class="muted">未设置</span>`;
+  const text = typeof value === "object" ? JSON.stringify(value) : String(value);
+  return `<span class="gv mono" title="${esc(text)}">${esc(text)}</span>`;
+}
+
+function gConfig() {
+  const d = G.data;
+  const files = d.files.map((file) => `<div class="grow" style="grid-template-columns:1fr 230px 74px">
+      <div><div class="t mono">${esc(file.name)}</div>
+        <div class="n mono" title="${esc(file.path)}">${esc(file.path)}</div></div>
+      <div class="n">${bytes(file.bytes)} · 改于 ${when(file.modified * 1000)}</div>
+      <div class="num"><button class="mini" data-config="${esc(file.name)}">编辑</button></div>
+    </div>`).join("");
+
+  const groups = new Map();
+  for (const row of d.settingKeys) {
+    const name = SETTINGS_GROUP[row.key] || "其他";
+    if (!groups.has(name)) groups.set(name, []);
+    groups.get(name).push(row);
+  }
+  let rows = "";
+  for (const name of GROUP_ORDER) {
+    const items = (groups.get(name) || []).filter((row) => !G.onlySet || !row.isNull);
+    if (!items.length) continue;
+    rows += `<tr class="grp"><td colspan="3">${esc(name)}</td></tr>`;
+    for (const row of items) {
+      rows += `<tr class="${row.isNull ? "nullrow" : ""}">
+        <td class="l mono">${esc(row.key)}</td>
+        <td class="l">${gvalue(row)}</td>
+        <td class="l doc">${esc(SETTINGS_DOC[row.key] || "本地没有这个键的说明。")}</td></tr>`;
+    }
+  }
+  const setCount = d.settingKeys.filter((row) => !row.isNull).length;
+
+  return `<p class="gsec-note">两个文件都在 ${esc(d.roots.agent)}。编辑会先校验 JSON，再写一份带时间戳的备份；
+      保存后不会热重载，正在跑的会话仍用旧配置。</p>`
+    + `<div class="card"><h2>配置文件</h2>${files}</div>`
+    + `<div class="card"><h2>settings.json 的每一项
+        <span class="muted" style="text-transform:none;letter-spacing:0">${setCount} / ${d.settingKeys.length} 个键已设置</span>
+        <label class="muted" style="margin-left:auto;font-size:12px;text-transform:none;letter-spacing:0">
+          <input type="checkbox" id="gonlyset" ${G.onlySet ? "checked" : ""}> 只看已设置</label></h2>
+      <div class="tablewrap" style="max-height:none"><table>
+        <thead><tr><th class="l">键</th><th class="l">当前值</th><th class="l">说明</th></tr></thead>
+        <tbody>${rows || `<tr><td colspan="3" class="muted">没有已设置的键。</td></tr>`}</tbody>
+      </table></div></div>`;
+}
+
+// ------------------------------------------------------------- 记忆
+
+function gMemory() {
+  const d = G.data;
+  const harness = d.harness;
+  const kinds = [["prompt", "提示"], ["memory", "记忆"], ["skill", "技能"], ["subagent", "子代理"]];
+  const chips = kinds.map(([id, label]) => `<button class="chip gkind${G.kind === id ? " on" : ""}"
+      data-kind="${id}">${label} ${num((harness.kinds[id] || []).length)}</button>`).join(" ");
+  const rows = harness.kinds[G.kind] || [];
+  const list = rows.map((row) => {
+    const find = `${row.title} ${row.path} ${row.head}`.toLowerCase();
+    return `<div class="gm" data-kind="${row.kind}" data-entry="${esc(row.id)}" data-find="${esc(find)}">
+      <div class="t">${esc(row.title || row.id)}</div>
+      <div class="m"><span class="chip">${esc(row.path || "—")}</span>
+        <span>v${row.version}</span><span>${num(row.chars)} 字</span>
+        <span>${iso(row.updated)}</span></div>
+      <div class="h">${esc(row.head)}</div>
+    </div>`;
+  }).join("") || `<p class="muted">这一类还是空的。</p>`;
+
+  const refinements = (harness.refinements || []).map((ref) => `<div class="gm"
+      data-refine="${esc(ref.id)}" data-find="${esc((ref.trigger + " " + ref.outcome).toLowerCase())}">
+      <div class="t">${esc(ref.trigger)}</div>
+      <div class="m"><span>${iso(ref.created)}</span>
+        <span>${(ref.changes || []).length} 处改动</span>
+        <span>${esc((ref.changes || []).slice(0, 2).join(" / ").slice(0, 90))}</span></div>
+      <div class="h">${esc(ref.outcome || "")}</div>
+    </div>`).join("") || `<p class="muted">还没有 refine 记录。</p>`;
+
+  return `<p class="gsec-note">全局 harness：${esc(harness.path)}。这些条目会随每个新会话一起注入，
+      所以「记忆」多了本身也是上下文成本。点开看全文。</p>`
+    + `<div class="card"><h2>条目 <span id="gmem-note" class="muted" style="text-transform:none;letter-spacing:0"></span></h2>
+      <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:6px">
+        ${chips}
+        <input id="gmq" value="${esc(G.q)}" placeholder="搜索标题、路径、正文开头…"
+          style="margin-left:auto;min-width:240px;background:var(--panel2);color:var(--fg);
+          border:1px solid var(--line);border-radius:6px;padding:5px 9px;font:inherit;font-size:12px">
+      </div>
+      ${list}</div>`
+    + `<div class="card"><h2>refine 记录
+        <span class="muted" style="text-transform:none;letter-spacing:0">${(harness.refinements || []).length} 次</span></h2>
+      ${refinements}</div>`;
+}
+
+function filterMemory() {
+  const query = G.q.trim().toLowerCase();
+  let shown = 0;
+  document.querySelectorAll("#gbody .gm[data-find]").forEach((row) => {
+    const hit = !query || row.dataset.find.includes(query);
+    row.style.display = hit ? "" : "none";
+    if (hit) shown++;
+  });
+  const note = $("gmem-note");
+  if (note) note.textContent = query ? `匹配 ${shown} 条` : "";
+}
+
+// ------------------------------------------------------------- 技能
+
+function gSkills() {
+  const d = G.data.skills;
+  const block = (items, label, path) => `<div class="card"><h2>${label}
+      <span class="muted" style="text-transform:none;letter-spacing:0">${items.length} 个 · ${esc(path)}</span></h2>
+      ${items.map((skill) => `<div class="sk" data-skill="${esc(skill.dir)}" data-source="${skill.source}">
+        <div class="top"><span class="nm">${esc(skill.name)}</span>
+          ${skill.hasPython ? '<span class="chip">Python</span>' : ""}
+          <span class="mt">${skill.files} 个文件 · ${bytes(skill.bytes)}</span></div>
+        <div class="ds">${esc(skill.description || "（没有 description）")}</div>
+      </div>`).join("") || `<p class="muted">这个目录是空的。</p>`}</div>`;
+  return `<p class="gsec-note">技能是 Markdown 指令；带 Python 的还会注册成可调用函数。点开看全文和文件清单。</p>`
+    + block(d.prime, "内置技能", d.primePath)
+    + block(d.user, "用户技能", d.userPath);
+}
+
+// ------------------------------------------------------------- 模型与 MCP
+
+function gModels() {
+  const d = G.data;
+  const fallback = d.defaults;
+  const providers = d.providers.map((provider) => `<details class="prov">
+      <summary><span class="pn">${esc(provider.name)}</span>
+        <span class="chip">${esc(provider.api || "—")}</span>
+        <span class="dim mono">${esc(provider.baseUrl || "")}</span>
+        <span class="mt">${provider.models.length} 个模型${provider.apiKey ? " · key " + esc(String(provider.apiKey)) : ""}</span>
+      </summary>
+      <table><thead><tr><th class="l">名称</th><th class="l">id</th><th>上下文</th>
+        <th class="l">输入</th><th class="l">思考档</th></tr></thead>
+      <tbody>${provider.models.map((model) => `<tr>
+        <td class="l">${esc(model.name || model.id)}</td>
+        <td class="l mono">${esc(model.id)}</td>
+        <td>${model.contextWindow ? num(model.contextWindow) : "—"}</td>
+        <td class="l">${(model.input || []).join(" / ") || "—"}</td>
+        <td class="l">${(model.thinking || []).join(" ") || "—"}${model.reasoning === false ? " · 无推理" : ""}</td>
+      </tr>`).join("")}</tbody></table>
+    </details>`).join("");
+
+  const servers = d.mcp.servers.map((server) => `<tr>
+      <td class="l">${esc(server.name)}</td>
+      <td class="l">${esc(server.type)}</td>
+      <td class="l mono" title="${esc(server.url || "")}">${esc(server.url || [server.command, ...(server.args || [])].filter(Boolean).join(" "))}</td>
+      <td class="l">${esc((server.envKeys || []).join(", ") || "—")}</td>
+    </tr>`).join("");
+  const catalog = d.mcp.catalog.counts;
+
+  return ghero([
+    [fallback.model || "—", `默认模型 · ${fallback.provider || "—"}`, "思考 " + (fallback.thinking || "—")],
+    [String(d.counts.providers), "供应商", ""],
+    [String(d.counts.models), "模型", ""],
+    [String(d.counts.mcp), "已配置 MCP", catalog ? `目录 ${catalog.ready}/${catalog.total} 就绪` : ""],
+  ])
+  + `<div class="card"><h2>模型默认值</h2>
+      <table><tbody>
+        ${[["子代理", fallback.subagentModel], ["辅助", fallback.auxiliaryModel],
+           ["看图", fallback.imageModel], ["备用", fallback.backupModel]]
+          .map(([label, value]) => `<tr><td class="l">${label}</td>
+            <td class="l mono">${esc(value || "继承默认")}</td></tr>`).join("")}
+      </tbody></table></div>`
+  + `<div class="card"><h2>供应商 <span class="muted" style="text-transform:none;letter-spacing:0">点开看模型</span></h2>
+      <p class="gsec-note" style="margin:0 0 8px">apiKey 一列显示的是环境变量名；真正的值不在这个文件里。</p>
+      ${providers}</div>`
+  + `<div class="card"><h2>MCP 服务 <span class="muted" style="text-transform:none;letter-spacing:0">${d.mcp.servers.length} 个已配置</span></h2>
+      <div class="tablewrap" style="max-height:none"><table>
+        <thead><tr><th class="l">名称</th><th class="l">类型</th><th class="l">目标</th><th class="l">env 键</th></tr></thead>
+        <tbody>${servers || `<tr><td colspan="4" class="muted">没有配置 MCP 服务。</td></tr>`}</tbody>
+      </table></div></div>`;
+}
+
+// ------------------------------------------------------------- 运行与日志
+
+function gRuntime() {
+  const d = G.data;
+  const runs = d.telemetry.runs;
+  const events = Object.entries(d.telemetry.events)
+    .sort((a, b) => b[1] - a[1])
+    .map(([name, count]) => `<tr><td class="l mono">${esc(name)}</td>
+      <td>${num(count)}</td></tr>`).join("");
+  const logRow = (log) => `<div class="grow" style="grid-template-columns:1fr 96px 150px 74px">
+      <div class="mono" style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(log.name)}</div>
+      <div class="num">${bytes(log.bytes)}</div>
+      <div class="num">${when(log.modified * 1000)}</div>
+      <div class="num"><button class="mini" data-log="${esc(log.name)}">末尾</button></div>
+    </div>`;
+  const logs = d.logs.slice(0, 12).map(logRow).join("")
+    + (d.logs.length > 12
+      ? `<details><summary class="muted" style="cursor:pointer;padding:8px 0;font-size:12px">
+          其余 ${d.logs.length - 12} 个日志</summary>${d.logs.slice(12).map(logRow).join("")}</details>`
+      : "");
+  const installs = d.installs;
+  const list = (items, label) => (items && items.length)
+    ? `<div class="grow" style="grid-template-columns:1fr"><div>
+         <div class="n">${esc(label)}</div>
+         <div class="mono" style="font-size:12px">${items.map((item) => esc(item)).join("<br>")}</div>
+       </div></div>` : "";
+  const errors = (d.clientErrors || []).slice().reverse()
+    .map((line) => esc(line)).join("\n") || "（没有）";
+
+  return ghero([
+    [num(runs.total), "遥测运行", `${runs.errors} 次 error`],
+    [dur(runs.p50ms), "p50 时长", `最长 ${dur(runs.maxms)}`],
+    [num(runs.modelCalls), "模型调用", `${num(runs.retries)} 次重试`],
+    [String(d.logs.length), "日志文件", bytes(d.logs.reduce((sum, log) => sum + log.bytes, 0))],
+  ])
+  + `<div class="card"><h2>遥测事件 <span class="muted" style="text-transform:none;letter-spacing:0">含已轮转的 telemetry.jsonl.1</span></h2>
+      <div class="tablewrap" style="max-height:none"><table>
+        <thead><tr><th class="l">事件</th><th>次数</th></tr></thead><tbody>${events}</tbody></table></div></div>`
+  + `<div class="card"><h2>日志文件 <span class="muted" style="text-transform:none;letter-spacing:0">按大小排序</span></h2>${logs}</div>`
+  + `<div class="card"><h2>客户端错误 <span class="muted" style="text-transform:none;letter-spacing:0">最后 ${d.clientErrors.length} 条，新的在上</span></h2>
+      <pre>${errors}</pre></div>`
+  + `<div class="card"><h2>已安装</h2>
+      ${list(installs.extensions, "扩展")}
+      ${list(installs.packages, "技能包")}
+      ${list(installs.themes, "主题")}
+      ${list(installs.repos, "克隆的仓库")}
+    </div>`;
+}
+
+// ------------------------------------------------------------- 内容查看
+
+async function openHarnessEntry(kind, id) {
+  const el = viewerEl();
+  el.classList.add("open");
+  el.querySelector("#v-title").textContent = "载入中…";
+  el.querySelector("#v-meta").textContent = "";
+  el.querySelector("#v-body").innerHTML = `<p class="empty">载入中…</p>`;
+  el.querySelector("#v-info").textContent = "";
+  el.querySelector("#v-prev").disabled = true;
+  el.querySelector("#v-next").disabled = true;
+  viewer.label = null;
+  try {
+    const data = await getJSON(`/api/global/entry?kind=${encodeURIComponent(kind)}`
+      + `&id=${encodeURIComponent(id)}`);
+    el.querySelector("#v-title").textContent = data.title || id;
+    const meta = data.meta || {};
+    el.querySelector("#v-meta").textContent = [kind, meta.path, meta.scope,
+      meta.version ? `v${meta.version}` : "", meta.updated ? `改于 ${iso(meta.updated)}` : ""]
+      .filter(Boolean).join(" · ");
+    el.querySelector("#v-body").innerHTML = `<pre>${esc(data.text || "（空）")}</pre>`;
+  } catch (error) {
+    el.querySelector("#v-body").innerHTML = `<p class="empty">${esc(error.message || error)}</p>`;
+  }
+}
+
+async function openSkill(source, name) {
+  const el = viewerEl();
+  el.classList.add("open");
+  el.querySelector("#v-title").textContent = name;
+  el.querySelector("#v-meta").textContent = source === "prime" ? "内置技能" : "用户技能";
+  el.querySelector("#v-body").innerHTML = `<p class="empty">载入中…</p>`;
+  el.querySelector("#v-info").textContent = "";
+  el.querySelector("#v-prev").disabled = true;
+  el.querySelector("#v-next").disabled = true;
+  viewer.label = null;
+  try {
+    const data = await getJSON(`/api/global/skill?source=${encodeURIComponent(source)}`
+      + `&name=${encodeURIComponent(name)}`);
+    const files = (data.files || []).map((file) =>
+      `<span class="chip">${esc(file.name)} · ${bytes(file.bytes)}</span>`).join(" ");
+    el.querySelector("#v-meta").textContent = data.path;
+    el.querySelector("#v-body").innerHTML =
+      `<div style="margin:10px 0 8px">${files}</div><pre>${esc(data.text)}</pre>`;
+  } catch (error) {
+    el.querySelector("#v-body").innerHTML = `<p class="empty">${esc(error.message || error)}</p>`;
+  }
+}
+
+async function openLog(name) {
+  const el = viewerEl();
+  el.classList.add("open");
+  el.querySelector("#v-title").textContent = name;
+  el.querySelector("#v-meta").textContent = "";
+  el.querySelector("#v-body").innerHTML = `<p class="empty">载入中…</p>`;
+  el.querySelector("#v-info").textContent = "";
+  el.querySelector("#v-prev").disabled = true;
+  el.querySelector("#v-next").disabled = true;
+  viewer.label = null;
+  try {
+    const data = await getJSON(`/api/global/log?name=${encodeURIComponent(name)}&lines=400`);
+    el.querySelector("#v-meta").textContent = `${num(data.lines)} 行`;
+    el.querySelector("#v-info").textContent = `显示第 ${num(data.from + 1)} 行之后`;
+    el.querySelector("#v-body").innerHTML = `<pre>${esc(data.text)}</pre>`;
+  } catch (error) {
+    el.querySelector("#v-body").innerHTML = `<p class="empty">${esc(error.message || error)}</p>`;
+  }
+}
+
+// ------------------------------------------------------------- 配置编辑器
+
+function geditEl() {
+  if (gedit.el) return gedit.el;
+  const wrap = document.createElement("div");
+  wrap.className = "modal";
+  wrap.id = "gedit";
+  wrap.innerHTML = `<div class="sheet" role="dialog" aria-modal="true">
+      <header>
+        <h3 id="g-edit-title"></h3>
+        <span class="meta" id="g-edit-meta"></span>
+        <span class="spacer" style="flex:1"></span>
+        <button id="g-edit-close">关闭 (Esc)</button>
+      </header>
+      <div class="body">
+        <p class="muted" style="font-size:12px;margin:8px 0">保存前校验 JSON，并留一份带时间戳的备份。
+          不会热重载：正在跑的会话仍用旧配置，新会话或重启后生效。</p>
+        <textarea id="g-edit-text" spellcheck="false"></textarea>
+        <div class="status" id="g-edit-status"></div>
+      </div>
+      <div class="foot">
+        <span class="info" id="g-edit-info"></span>
+        <button id="g-edit-check">校验</button>
+        <button id="g-edit-save" class="primary">保存</button>
+      </div>
+    </div>`;
+  document.body.appendChild(wrap);
+  wrap.addEventListener("click", (event) => {
+    if (event.target === wrap) wrap.classList.remove("open");
+  });
+  wrap.querySelector("#g-edit-close").addEventListener("click", () => wrap.classList.remove("open"));
+  wrap.querySelector("#g-edit-check").addEventListener("click", validateEdit);
+  wrap.querySelector("#g-edit-save").addEventListener("click", saveEdit);
+  wrap.querySelector("#g-edit-text").addEventListener("input", validateEdit);
+  wrap.querySelector("#g-edit-text").addEventListener("keydown", (event) => {
+    if ((event.ctrlKey || event.metaKey) && event.key === "s") {
+      event.preventDefault();
+      saveEdit();
+    }
+  });
+  gedit.el = wrap;
+  return wrap;
+}
+
+function validateEdit() {
+  const el = geditEl();
+  const text = el.querySelector("#g-edit-text").value;
+  const status = el.querySelector("#g-edit-status");
+  try {
+    JSON.parse(text);
+    status.className = "status ok";
+    status.textContent = `JSON 合法 · ${bytes(new Blob([text]).size)}`;
+    return true;
+  } catch (error) {
+    status.className = "status bad";
+    status.textContent = "JSON 不合法：" + (error.message || error);
+    return false;
+  }
+}
+
+async function openConfig(name) {
+  const el = geditEl();
+  el.classList.add("open");
+  el.dataset.name = name;
+  el.querySelector("#g-edit-title").textContent = name;
+  el.querySelector("#g-edit-meta").textContent = "";
+  el.querySelector("#g-edit-info").textContent = "载入中…";
+  const area = el.querySelector("#g-edit-text");
+  area.value = "";
+  area.disabled = true;
+  try {
+    const data = await getJSON(`/api/global/file?name=${encodeURIComponent(name)}`);
+    el.querySelector("#g-edit-meta").textContent =
+      `${data.path} · ${bytes(data.bytes)} · 改于 ${when(data.modified * 1000)}`;
+    area.value = data.text;
+    area.disabled = false;
+    el.querySelector("#g-edit-info").textContent = data.hasSecrets
+      ? "这个文件里有明文密钥，截图或分享前留意。"
+      : "已载入。";
+    validateEdit();
+    // Start at the top; focusing alone leaves the caret at the end of the file.
+    area.setSelectionRange(0, 0);
+    area.scrollTop = 0;
+    area.focus();
+  } catch (error) {
+    el.querySelector("#g-edit-info").textContent = String(error.message || error);
+  }
+}
+
+async function saveEdit() {
+  const el = geditEl();
+  const name = el.dataset.name;
+  const info = el.querySelector("#g-edit-info");
+  if (!name) return;
+  if (!validateEdit()) {
+    info.textContent = "没有保存：先修好 JSON。";
+    return;
+  }
+  info.textContent = "保存中…";
+  try {
+    const response = await fetch("/api/global/save", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name, text: el.querySelector("#g-edit-text").value }),
+    });
+    if (!response.ok) {
+      info.textContent = await response.text();
+      return;
+    }
+    const data = await response.json();
+    info.textContent = `已保存 · 备份 ${data.backup}`;
+    setStatus(`${name} 已写入；新会话生效`);
+    loadGlobal(true);
+  } catch (error) {
+    info.textContent = String(error.message || error);
+  }
+}
+
+// ------------------------------------------------------------- 事件绑定
+
+function setupPages() {
+  document.querySelectorAll("#pages button").forEach((btn) => {
+    btn.addEventListener("click", () => setPage(btn.dataset.page));
+  });
+  $("grail").addEventListener("click", (event) => {
+    const btn = event.target.closest("[data-gsection]");
+    if (!btn) return;
+    G.section = btn.dataset.gsection;
+    localStorage.setItem(GS_KEY, G.section);
+    history.replaceState(null, "", "#global/" + G.section);
+    renderGlobal();
+  });
+  $("gbody").addEventListener("click", (event) => {
+    const refine = event.target.closest("[data-refine]");
+    if (refine) return void openHarnessEntry("refinement", refine.dataset.refine);
+    const entry = event.target.closest("[data-entry]");
+    if (entry) return void openHarnessEntry(entry.dataset.kind, entry.dataset.entry);
+    const skill = event.target.closest("[data-skill]");
+    if (skill) return void openSkill(skill.dataset.source, skill.dataset.skill);
+    const config = event.target.closest("[data-config]");
+    if (config) return void openConfig(config.dataset.config);
+    const log = event.target.closest("[data-log]");
+    if (log) return void openLog(log.dataset.log);
+    const kind = event.target.closest("[data-kind]");
+    if (kind) {
+      G.kind = kind.dataset.kind;
+      renderGlobal();
+    }
+  });
+  $("gbody").addEventListener("input", (event) => {
+    if (event.target.id === "gmq") {
+      G.q = event.target.value;
+      filterMemory();
+    } else if (event.target.id === "gonlyset") {
+      G.onlySet = event.target.checked;
+      renderGlobal();
+    }
+  });
+  document.addEventListener("keydown", (event) => {
+    if (event.key === "Escape" && gedit.el) gedit.el.classList.remove("open");
+  });
+}
+
+/// Which top-level page is showing right now.
+function activePage() {
+  const el = document.querySelector(".page.on");
+  return el && el.id === "page-global" ? "global" : "sessions";
+}
+
+$("refresh").addEventListener("click", () => {
+  if (activePage() === "global") loadGlobal(true); else refreshList();
+});
 document.addEventListener("keydown", (e) => {
-  if (e.key === "r" && (e.ctrlKey || e.metaKey)) { e.preventDefault(); refreshList(); }
+  if (e.key === "r" && (e.ctrlKey || e.metaKey)) {
+    e.preventDefault();
+    if (activePage() === "global") loadGlobal(true); else refreshList();
+  }
+});
+
+// A syntax error in one handler should be visible, not silent: the status bar
+// already exists and is the first place a user looks.
+window.addEventListener("error", (event) => {
+  setStatus(`脚本错误：${event.message}（${String(event.filename || "").split("/").pop()}:${event.lineno}）`, true);
 });
 
 setupFilter();
+setupPages();
 refreshList();
+// Restore the page named in the hash first (so links win), then the last one
+// used. The session list still refreshes in the background either way.
+// `#global/config` opens both the page and the section, which makes a
+// bookmark (or a screenshot probe) land exactly where it should.
+const hashSection = (location.hash.match(/^#\/?global\/([a-z]+)/) || [])[1];
+if (hashSection && GSECTIONS.some(([id]) => id === hashSection)) {
+  G.section = hashSection;
+  localStorage.setItem(GS_KEY, G.section);
+}
+if (/^#\/?glob/.test(location.hash) || localStorage.getItem(PAGE_KEY) === "global") {
+  setPage("global", false);
+} else {
+  setPage("sessions", false);
+}
+// Deep links: `#sessions/<id>` opens that session, `#global/config/<file>`
+// opens the editor. Both make a link to what you are looking at possible.
+const sessionLink = (location.hash.match(/^#\/?sessions\/([0-9a-f-]+)/) || [])[1];
+if (sessionLink && activePage() === "sessions") openSession(sessionLink);
+const configLink = (location.hash.match(/^#\/?global\/config\/([a-z.]+)$/) || [])[1];
+if (configLink && activePage() === "global") openConfig(configLink);
 </script>
 </body>
 </html>
