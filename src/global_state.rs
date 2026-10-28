@@ -462,6 +462,111 @@ fn mcp_of(roots: &Roots, settings: &Value) -> Value {
     })
 }
 
+// ------------------------------------------------------------- mcp probe
+
+/// Split `http(s)://host:port/path` into the parts a TCP probe needs.
+fn split_url(url: &str) -> Option<(&str, u16)> {
+    let (rest, default_port) = if let Some(tail) = url.strip_prefix("https://") {
+        (tail, 443)
+    } else {
+        (url.strip_prefix("http://")?, 80)
+    };
+    let host_port = rest.split('/').next()?;
+    let (host, port) = match host_port.rsplit_once(':') {
+        Some((host, port)) => (host, port.parse().ok()?),
+        None => (host_port, default_port),
+    };
+    if host.is_empty() {
+        return None;
+    }
+    Some((host, port))
+}
+
+/// One TCP connect, short timeout. A closed port answers instantly; a filtered
+/// one is what the timeout is for.
+fn probe_tcp(url: &str) -> (Option<bool>, String) {
+    use std::net::{TcpStream, ToSocketAddrs};
+    use std::time::Duration;
+    let Some((host, port)) = split_url(url) else {
+        return (Some(false), "URL 解析不了".to_string());
+    };
+    let Ok(addresses) = (host, port).to_socket_addrs() else {
+        return (Some(false), format!("解析不了 {host}"));
+    };
+    for address in addresses {
+        if TcpStream::connect_timeout(&address, Duration::from_millis(700)).is_ok() {
+            return (Some(true), format!("{host}:{port} 可连接"));
+        }
+    }
+    (Some(false), format!("{host}:{port} 连不上"))
+}
+
+/// A stdio server can only be checked on disk: the command is spawned by the
+/// agent, not by us, so "the script exists" is as far as an honest probe goes.
+fn probe_stdio(server: &Value) -> (Option<bool>, String) {
+    let command = server.get("command").and_then(Value::as_str).unwrap_or("");
+    let scripts: Vec<&str> = server
+        .get("args")
+        .and_then(Value::as_array)
+        .map(|args| args.iter().filter_map(Value::as_str).collect())
+        .unwrap_or_default();
+    if let Some(script) = scripts.iter().find(|arg| arg.ends_with(".js") || arg.ends_with(".mjs") || arg.ends_with(".py")) {
+        let exists = Path::new(script).exists();
+        return (Some(exists), if exists { format!("脚本存在：{script}") } else { format!("脚本不存在：{script}") });
+    }
+    if command.is_empty() {
+        return (Some(false), "没有 command".to_string());
+    }
+    (None, format!("{command}（运行期才能确认）"))
+}
+
+/// Reachability for every configured MCP server. On demand only: a dead
+/// endpoint costs a timeout, so this must never run as part of page load.
+#[must_use]
+pub fn mcp_probe(roots: &Roots) -> Value {
+    let settings = settings_of(roots);
+    let empty = Map::new();
+    let servers = settings.get("mcpServers").and_then(Value::as_object).unwrap_or(&empty);
+    let mut rows = Vec::new();
+    // Probe in parallel: a dead endpoint costs the full timeout, and with a
+    // dozen servers in series that adds up to seconds. Scope-bound threads let
+    // the borrowed settings stay borrowed.
+    std::thread::scope(|scope| {
+        let handles: Vec<_> = servers
+            .iter()
+            .map(|(name, server)| {
+                scope.spawn(move || {
+                    let kind = server.get("type").and_then(Value::as_str).unwrap_or("stdio");
+                    let started = Instant::now();
+                    let (ok, detail) = if kind == "http" || kind == "sse" {
+                        match server.get("url").and_then(Value::as_str) {
+                            Some(url) => probe_tcp(url),
+                            None => (Some(false), "没有 url".to_string()),
+                        }
+                    } else {
+                        probe_stdio(server)
+                    };
+                    json!({
+                        "name": name,
+                        "type": kind,
+                        "ok": ok,
+                        "detail": detail,
+                        "ms": started.elapsed().as_millis() as u64,
+                    })
+                })
+            })
+            .collect();
+        for handle in handles {
+            if let Ok(row) = handle.join() {
+                rows.push(row);
+            }
+        }
+    });
+    let up = rows.iter().filter(|row| row["ok"] == Value::Bool(true)).count();
+    let total = rows.len();
+    json!({"servers": Value::Array(rows), "up": up, "total": total})
+}
+
 // ------------------------------------------------------------- harness
 
 fn harness_state(roots: &Roots) -> Option<Value> {

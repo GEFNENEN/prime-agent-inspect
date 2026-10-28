@@ -230,6 +230,10 @@ fn serve(dir: &Path, port: u16, open: bool) -> Result<(), String> {
                     ),
                 }
             }
+            "/api/global/mcp-probe" => {
+                let body = prime_agent_inspect::global_state::mcp_probe(&global_roots);
+                json_response(&body)
+            }
             "/api/global/log" => {
                 let name = query_value(query, "name").unwrap_or_default();
                 let lines = query_value(query, "lines")

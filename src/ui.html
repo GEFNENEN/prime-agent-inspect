@@ -2140,6 +2140,8 @@ const GS_KEY = "prime-agent-inspect.gsection";
 
 const G = {
   data: null, busy: false,
+  // Filled by the on-demand MCP probe; null means "not probed yet".
+  mcpProbe: null,
   section: localStorage.getItem(GS_KEY) || "overview",
   kind: "memory", q: "", onlySet: true,
 };
@@ -2430,6 +2432,8 @@ function gConfig() {
         <span class="muted" style="text-transform:none;letter-spacing:0">${setCount} / ${d.settingKeys.length} 个键已设置</span>
         <label class="muted" style="margin-left:auto;font-size:12px;text-transform:none;letter-spacing:0">
           <input type="checkbox" id="gonlyset" ${G.onlySet ? "checked" : ""}> 只看已设置</label></h2>
+      <p class="gsec-note" style="margin:0 0 8px">说明按本地行为与键名整理，没有官方文档可核对；
+        动手前先确认改动只影响你想要的那一项。</p>
       <div class="tablewrap" style="max-height:none"><table>
         <thead><tr><th class="l">键</th><th class="l">当前值</th><th class="l">说明</th></tr></thead>
         <tbody>${rows || `<tr><td colspan="3" class="muted">没有已设置的键。</td></tr>`}</tbody>
@@ -2531,11 +2535,21 @@ function gModels() {
       </tr>`).join("")}</tbody></table>
     </details>`).join("");
 
+  const probeCell = (name) => {
+    if (!G.mcpProbe) return `<td class="l muted">—</td>`;
+    const row = G.mcpProbe.get(name);
+    if (!row) return `<td class="l muted">—</td>`;
+    const mark = row.ok === true ? "●" : row.ok === false ? "●" : "○";
+    const color = row.ok === true ? "var(--ok)" : row.ok === false ? "var(--bad)" : "var(--dim)";
+    return `<td class="l" title="${esc(row.detail)}" style="color:${color}">
+      ${mark} ${esc(row.detail)} <span class="muted">${num(row.ms)} ms</span></td>`;
+  };
   const servers = d.mcp.servers.map((server) => `<tr>
       <td class="l">${esc(server.name)}</td>
       <td class="l">${esc(server.type)}</td>
       <td class="l mono" title="${esc(server.url || "")}">${esc(server.url || [server.command, ...(server.args || [])].filter(Boolean).join(" "))}</td>
       <td class="l">${esc((server.envKeys || []).join(", ") || "—")}</td>
+      ${probeCell(server.name)}
     </tr>`).join("");
   const catalog = d.mcp.catalog.counts;
 
@@ -2555,10 +2569,15 @@ function gModels() {
   + `<div class="card"><h2>供应商 <span class="muted" style="text-transform:none;letter-spacing:0">点开看模型</span></h2>
       <p class="gsec-note" style="margin:0 0 8px">apiKey 一列显示的是环境变量名；真正的值不在这个文件里。</p>
       ${providers}</div>`
-  + `<div class="card"><h2>MCP 服务 <span class="muted" style="text-transform:none;letter-spacing:0">${d.mcp.servers.length} 个已配置</span></h2>
+  + `<div class="card"><h2>MCP 服务
+      <span class="muted" style="text-transform:none;letter-spacing:0">${d.mcp.servers.length} 个已配置${
+        G.mcpProbe ? ` · ${[...G.mcpProbe.values()].filter((row) => row.ok === true).length} 个可连接` : ""}</span>
+      <button class="mini" data-probe="mcp" style="margin-left:auto">探测连通性</button></h2>
+      <p class="gsec-note" style="margin:0 0 8px">探测只做一次 TCP 连接（700 ms 超时），
+        能区分「端口没开」和「服务在跑」；它不验证 MCP 协议本身。</p>
       <div class="tablewrap" style="max-height:none"><table>
-        <thead><tr><th class="l">名称</th><th class="l">类型</th><th class="l">目标</th><th class="l">env 键</th></tr></thead>
-        <tbody>${servers || `<tr><td colspan="4" class="muted">没有配置 MCP 服务。</td></tr>`}</tbody>
+        <thead><tr><th class="l">名称</th><th class="l">类型</th><th class="l">目标</th><th class="l">env 键</th><th class="l">连通性</th></tr></thead>
+        <tbody>${servers || `<tr><td colspan="5" class="muted">没有配置 MCP 服务。</td></tr>`}</tbody>
       </table></div></div>`;
 }
 
@@ -2798,6 +2817,23 @@ async function saveEdit() {
   }
 }
 
+async function runMcpProbe() {
+  const button = document.querySelector('[data-probe="mcp"]');
+  if (button) {
+    button.disabled = true;
+    button.textContent = "探测中…";
+  }
+  setStatus("探测 MCP 服务…");
+  try {
+    const data = await getJSON("/api/global/mcp-probe");
+    G.mcpProbe = new Map((data.servers || []).map((row) => [row.name, row]));
+    renderGlobal();
+    setStatus(`MCP：${data.up} / ${data.total} 个可连接`);
+  } catch (error) {
+    setStatus("探测失败：" + (error.message || error), true);
+  }
+}
+
 // ------------------------------------------------------------- 事件绑定
 
 function setupPages() {
@@ -2823,6 +2859,8 @@ function setupPages() {
     if (config) return void openConfig(config.dataset.config);
     const log = event.target.closest("[data-log]");
     if (log) return void openLog(log.dataset.log);
+    const probe = event.target.closest("[data-probe]");
+    if (probe) return void runMcpProbe();
     const kind = event.target.closest("[data-kind]");
     if (kind) {
       G.kind = kind.dataset.kind;
