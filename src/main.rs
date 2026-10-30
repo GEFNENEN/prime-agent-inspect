@@ -121,6 +121,44 @@ fn serve(dir: &Path, port: u16, open: bool) -> Result<(), String> {
                 },
                 None => prime_agent_inspect::http::Response::text(400, "missing id"),
             },
+            "/api/prompt" => {
+                let session_id = query_value(query, "id").unwrap_or_default();
+                let offset = query_value(query, "offset")
+                    .and_then(|value| value.parse::<usize>().ok())
+                    .unwrap_or(0);
+                let limit = query_value(query, "limit")
+                    .and_then(|value| value.parse::<usize>().ok())
+                    .unwrap_or(10)
+                    .clamp(1, 5000);
+                // A page is bounded by characters, not entries: one tool
+                // result can be 400 KB, and ten of those in one response is a
+                // stall with no progress.
+                let max_chars = query_value(query, "maxChars")
+                    .and_then(|value| value.parse::<usize>().ok())
+                    .unwrap_or(2_000_000)
+                    .clamp(10_000, 8_000_000);
+                match resolve_session(&root, &session_id) {
+                    Some(path) => match cache.get(&path) {
+                        Ok(cached) => {
+                            let body = prime_agent_inspect::web::prompt_text(
+                                &cached.session,
+                                offset,
+                                limit,
+                                max_chars,
+                            );
+                            match serde_json::to_string(&body) {
+                                Ok(body) => prime_agent_inspect::http::Response::json(body),
+                                Err(error) => prime_agent_inspect::http::Response::text(
+                                    500,
+                                    &format!("cannot serialize: {error}"),
+                                ),
+                            }
+                        }
+                        Err(error) => prime_agent_inspect::http::Response::text(500, &error),
+                    },
+                    None => prime_agent_inspect::http::Response::text(404, "no such session"),
+                }
+            }
             "/api/slice" => {
                 let session_id = query_value(query, "id").unwrap_or_default();
                 let label = query_value(query, "label").unwrap_or_default();

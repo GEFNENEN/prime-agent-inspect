@@ -52,6 +52,10 @@ pub struct Assembly {
     /// semantic grouping above says "toolResult is 55%"; this says which tool
     /// produced it.
     pub tools: Vec<ToolShare>,
+    /// Indices of the kept entries, in the order the model receives them.
+    /// `components` groups them by kind; this keeps the reading order so the
+    /// browser can show the prompt as one document.
+    pub retained: Vec<usize>,
 }
 
 /// One tool's share of the retained `toolResult` rows.
@@ -235,7 +239,7 @@ fn assemble_at(session: &Session, path: &[usize], end: usize, marks: &Marks) -> 
     let mut per_tool: std::collections::HashMap<&str, (Chars, u64)> =
         std::collections::HashMap::new();
 
-    for index in kept {
+    for &index in &kept {
         let entry = &session.entries[index];
         let chars = entry.chars();
         match &entry.kind {
@@ -295,6 +299,7 @@ fn assemble_at(session: &Session, path: &[usize], end: usize, marks: &Marks) -> 
         })
         .collect();
     assembly.tools.sort_by_key(|share| std::cmp::Reverse(share.tokens));
+    assembly.retained = kept;
 
     // Estimating each tool separately and summing does not land on the
     // toolResult component's total (rounding differs), and the UI shows both

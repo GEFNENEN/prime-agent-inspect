@@ -1389,6 +1389,88 @@ pub fn slice_text(
     })
 }
 
+/// The retained prompt as one document, in the order the model receives it.
+///
+/// `slice_text` answers "what is in this bucket"; this answers "what will the
+/// next turn actually send", which is the question behind the 正文 number. The
+/// entry list comes from the assembler, so it is the same set the token count
+/// was taken from — not a re-derivation that could drift.
+///
+/// Text is never truncated here: "查看全部内容" that shows 600 characters per
+/// block is the same lie in a bigger box. Pages are bounded by characters
+/// instead, and the payload carries `next` so the reader can continue from the
+/// exact entry where the page stopped. A single entry larger than the budget is
+/// sent whole — cutting it would be the truncation this endpoint exists to
+/// avoid.
+#[must_use]
+pub fn prompt_text(
+    session: &Session,
+    offset: usize,
+    limit: usize,
+    max_chars: usize,
+) -> Value {
+    let leaf = session.default_leaf().unwrap_or_default();
+    let assembly = assemble(session, leaf);
+    let total = assembly.retained.len();
+    let start = offset.min(total);
+    let end = start.saturating_add(limit).min(total);
+    let mut rows = Vec::with_capacity(end - start);
+    let mut used = 0_u64;
+    let mut next: Option<usize> = None;
+
+    for (position, &index) in assembly.retained[start..end].iter().enumerate() {
+        let entry = &session.entries[index];
+        let (blocks, note) = match crate::session::raw_line_at(&session.path, entry.offset) {
+            Ok(value) => (entry_blocks(&value), None),
+            Err(error) => (Vec::new(), Some(error)),
+        };
+        let rows_chars: u64 = blocks.iter().map(|block| block.text.chars().count() as u64).sum();
+        // Stop before the entry that would overflow the page, but never before
+        // the first one: a page always makes progress.
+        if !rows.is_empty() && used + rows_chars > max_chars as u64 {
+            next = Some(start + position);
+            break;
+        }
+        used += rows_chars;
+        let kept: Vec<Value> = blocks
+            .iter()
+            .map(|block| {
+                let chars = block.text.chars().count() as u64;
+                json!({
+                    "role": block.role,
+                    "text": block.text,
+                    "chars": chars,
+                })
+            })
+            .collect();
+        let (tokens, _) = crate::token_est::estimate(entry.chars());
+        rows.push(json!({
+            "id": entry.id,
+            "at": entry.at,
+            "timestamp": entry.timestamp,
+            "kind": entry.kind_name(),
+            "chars": entry.chars().total(),
+            "tokens": tokens,
+            "blocks": kept,
+            "error": note,
+        }));
+    }
+    if next.is_none() && start + rows.len() < total {
+        next = Some(start + rows.len());
+    }
+
+    json!({
+        "total": total,
+        "offset": start,
+        "next": next,
+        "chars": used,
+        "keptEntries": assembly.kept_entries,
+        "droppedEntries": assembly.dropped_entries,
+        "tokens": assembly.total_tokens(),
+        "rows": rows,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1464,6 +1546,67 @@ mod tests {
         assert_eq!(row["id"], "u1");
         assert_eq!(row["blocks"][0]["text"], "hello there");
         assert_eq!(row["blocks"][0]["chars"], 11);
+    }
+
+    /// The prompt view must return exactly the entries the assembler kept, in
+    /// the order it kept them — that order is the document.
+    #[test]
+    fn prompt_text_returns_the_kept_entries_in_order() {
+        let (_dir, path) = write_session(&[
+            r#"{"type":"session","id":"s1","timestamp":"2026-01-01T00:00:00.000Z","cwd":"/tmp"}"#,
+            r#"{"type":"message","id":"u1","parentId":null,"timestamp":"2026-01-01T00:00:01.000Z","message":{"role":"user","content":"first"}}"#,
+            r#"{"type":"message","id":"a1","parentId":"u1","timestamp":"2026-01-01T00:00:02.000Z","message":{"role":"assistant","content":[{"type":"text","text":"second"}]}}"#,
+            r#"{"type":"message","id":"u2","parentId":"a1","timestamp":"2026-01-01T00:00:03.000Z","message":{"role":"user","content":"third"}}"#,
+        ]);
+        let session = crate::session::load(&path).expect("loads");
+        let payload = prompt_text(&session, 0, 10, 100_000);
+        let ids: Vec<&str> = payload["rows"]
+            .as_array()
+            .expect("rows")
+            .iter()
+            .map(|row| row["id"].as_str().expect("id"))
+            .collect();
+        assert_eq!(ids, ["u1", "a1", "u2"]);
+        assert_eq!(payload["total"], 3);
+        assert_eq!(payload["rows"][0]["blocks"][0]["text"], "first");
+    }
+
+    /// Paging starts from the beginning of the document, unlike the bucket
+    /// viewer, because a prompt is read front to back.
+    #[test]
+    fn prompt_text_pages_from_the_start() {
+        let (_dir, path) = write_session(&[
+            r#"{"type":"session","id":"s1","timestamp":"2026-01-01T00:00:00.000Z","cwd":"/tmp"}"#,
+            r#"{"type":"message","id":"u1","parentId":null,"timestamp":"2026-01-01T00:00:01.000Z","message":{"role":"user","content":"first"}}"#,
+            r#"{"type":"message","id":"u2","parentId":"u1","timestamp":"2026-01-01T00:00:03.000Z","message":{"role":"user","content":"second"}}"#,
+        ]);
+        let session = crate::session::load(&path).expect("loads");
+        let payload = prompt_text(&session, 1, 10, 100_000);
+        assert_eq!(payload["offset"], 1);
+        assert_eq!(payload["rows"][0]["id"], "u2");
+    }
+
+    /// The page stops before an entry it cannot fit, and says where to resume.
+    #[test]
+    fn prompt_text_pages_by_characters_and_reports_next() {
+        let big = "x".repeat(400);
+        let second = format!(
+            r#"{{"type":"message","id":"u2","parentId":"u1","timestamp":"2026-01-01T00:00:03.000Z","message":{{"role":"user","content":"{big}"}}}}"#
+        );
+        let (_dir, path) = write_session(&[
+            r#"{"type":"session","id":"s1","timestamp":"2026-01-01T00:00:00.000Z","cwd":"/tmp"}"#,
+            r#"{"type":"message","id":"u1","parentId":null,"timestamp":"2026-01-01T00:00:01.000Z","message":{"role":"user","content":"small"}}"#,
+            &second,
+        ]);
+        let session = crate::session::load(&path).expect("loads");
+        let payload = prompt_text(&session, 0, 10, 100);
+        assert_eq!(payload["rows"].as_array().unwrap().len(), 1);
+        assert_eq!(payload["next"], 1);
+        // The first entry is sent whole even though it alone exceeds a page.
+        let payload = prompt_text(&session, 1, 10, 100);
+        assert_eq!(payload["rows"][0]["blocks"][0]["text"].as_str().unwrap().len(), 400);
+        // Nothing left to read: `null` means "done", not "resume at the end".
+        assert!(payload["next"].is_null());
     }
 
     /// A block longer than the budget is cut, and the row says so.

@@ -247,6 +247,19 @@ canvas{width:100%;height:auto;display:block}
   text-transform:uppercase;margin:6px 0 3px}
 .ent .cut{color:var(--warn);font-size:11px;margin-top:4px}
 .sheet .empty{color:var(--dim);padding:24px 0;text-align:center;font-size:13px}
+/* A button that reads as a link: it acts on the number beside it, so it must
+   not compete with the number. */
+button.link{background:rgba(139,127,212,.14);border:1px solid rgba(139,127,212,.45);
+  padding:1px 8px;margin-left:8px;font-size:11px;border-radius:999px;
+  color:#cfc7f5;cursor:pointer;vertical-align:1px}
+button.link:hover{background:rgba(139,127,212,.3);border-color:var(--accent);color:#fff}
+button.link:focus-visible{outline:2px solid var(--accent);outline-offset:1px}
+.sheet .body{font:12px/1.55 ui-monospace,Consolas,monospace}
+/* Reading the prompt end to end: a per-block scrollbar would hide exactly the
+   text this view exists to show, so blocks grow and the sheet scrolls. */
+.sheet .body.flat .ent pre{max-height:none;overflow:visible}
+.sheet .ent .idx{color:var(--dim);font-variant-numeric:tabular-nums;
+  min-width:3.4em;text-align:right}
 
 /* ---------- 顶层页面：会话 / 全局 ---------- */
 #pages{display:flex;gap:2px;background:var(--panel2);border:1px solid var(--line);
@@ -604,7 +617,8 @@ function renderDetail(d) {
       </div>
       <div>
         <div class="k">其中正文
-          <span class="muted">占 ${pct(contentShare)}</span></div>
+          <span class="muted">占 ${pct(contentShare)}</span>
+          <button class="link" id="open-prompt" title="按模型收到的顺序，查看下一轮会发出去的全部保留条目">查看全部内容</button></div>
         <div class="v">${num(content)} <small class="u">tokens</small></div>
         <div class="meter" title="正文 ${pct(contentShare)}，固定开销 ${pct(fixedShare)}">
           <i style="width:${(contentShare * 100).toFixed(2)}%;background:var(--accent)"></i>
@@ -698,11 +712,103 @@ function renderDetail(d) {
   setupComposition(d, compItems);
   setupTabs(d);
   setupRefinements(d);
+  // Bound here, not once: the panel is replaced wholesale on every session.
+  const openPrompt = $("open-prompt");
+  if (openPrompt) openPrompt.addEventListener("click", openPromptView);
 }
 
 /// Refinement rows fetch their body on click: the detail payload carries the
 /// summary and the edit titles, while rationale + expected outcome + edit
 /// bodies are 117 KB for this session and would be paid on every session click.
+// ------------------------------------------------ 正文全文（下一轮会发出去什么）
+//
+// Different question from the bucket viewer: that one explains a slice of the
+// donut, this one shows the document the model reads, in order. Its pager is an
+// entry offset, not a page number, because paging stops on character budget.
+const promptView = { el: null, loading: false, next: 0, total: 0, chars: 0 };
+
+function promptViewerEl() {
+  if (promptView.el) return promptView.el;
+  const wrap = document.createElement("div");
+  wrap.className = "modal";
+  wrap.id = "prompt-viewer";
+  wrap.innerHTML = `<div class="sheet" role="dialog" aria-modal="true">
+      <header>
+        <h3>正文全文 <span class="muted" style="text-transform:none;letter-spacing:0">下一轮会发出去的全部保留条目，按模型读到的顺序</span></h3>
+        <span class="meta" id="pv-meta"></span>
+        <span class="spacer" style="flex:1"></span>
+        <button id="pv-close">关闭 (Esc)</button>
+      </header>
+      <div class="body flat" id="pv-body"></div>
+      <div class="foot">
+        <span class="info" id="pv-info"></span>
+        <button id="pv-more">载入更多</button>
+        <button id="pv-top">回到顶部</button>
+      </div>
+    </div>`;
+  document.body.appendChild(wrap);
+  wrap.addEventListener("click", (event) => {
+    if (event.target === wrap) wrap.classList.remove("open");
+  });
+  wrap.querySelector("#pv-close").addEventListener("click", () => wrap.classList.remove("open"));
+  wrap.querySelector("#pv-more").addEventListener("click", () => loadPrompt());
+  wrap.querySelector("#pv-top").addEventListener("click", () => {
+    wrap.querySelector("#pv-body").scrollTop = 0;
+  });
+  promptView.el = wrap;
+  return wrap;
+}
+
+function openPromptView() {
+  if (!state.selected) return;
+  hideTip();
+  promptView.next = 0;
+  promptView.total = 0;
+  promptView.chars = 0;
+  const el = promptViewerEl();
+  el.classList.add("open");
+  el.querySelector("#pv-meta").textContent = "";
+  el.querySelector("#pv-body").innerHTML = '<p class="empty">载入中…</p>';
+  el.querySelector("#pv-info").textContent = "";
+  el.querySelector("#pv-more").style.display = "none";
+  void loadPrompt();
+}
+
+async function loadPrompt() {
+  if (promptView.loading || !state.selected) return;
+  promptView.loading = true;
+  const el = promptViewerEl();
+  const body = el.querySelector("#pv-body");
+  const more = el.querySelector("#pv-more");
+  more.disabled = true;
+  try {
+    const url = `/api/prompt?id=${encodeURIComponent(state.selected)}`
+      + `&offset=${promptView.next}&limit=1000&maxChars=3000000`;
+    const data = await getJSON(url);
+    if (data.error) throw new Error(data.error);
+    const rows = data.rows || [];
+    if (promptView.next === 0) body.innerHTML = "";
+    const html = rows.map((row, i) => entryCard(row, promptView.next + i + 1)).join("");
+    body.insertAdjacentHTML("beforeend", html || '<p class="empty">没有保留条目。</p>');
+    promptView.total = data.total;
+    promptView.chars += data.chars || 0;
+    promptView.next = data.next == null ? data.total : data.next;
+    el.querySelector("#pv-meta").textContent =
+      `${num(data.keptEntries)} 条保留 · ${num(data.tokens)} tokens`;
+    const shown = body.querySelectorAll(".ent").length;
+    el.querySelector("#pv-info").textContent =
+      `已显示 ${num(shown)} / ${num(data.total)} 条 · ${num(promptView.chars)} 字符`
+      + (data.droppedEntries ? ` · 另有 ${num(data.droppedEntries)} 条在切点之前，不在上下文里` : "");
+    more.style.display = promptView.next < data.total ? "" : "none";
+    more.disabled = false;
+  } catch (error) {
+    body.insertAdjacentHTML("beforeend",
+      `<p class="empty">载入失败：${esc(error.message)}</p>`);
+  } finally {
+    promptView.loading = false;
+  }
+}
+
 function setupRefinements(d) {
   const list = $("refine-list");
   if (!list) return;
@@ -1538,6 +1644,7 @@ function dismissTipOnScroll() {
     if (e.key !== "Escape") return;
     hideTip();
     closeViewer();
+    if (promptView.el) promptView.el.classList.remove("open");
   });
 }
 
@@ -2003,11 +2110,15 @@ async function loadSlice(page) {
   }
 }
 
-function entryCard(row) {
+function entryCard(row, index) {
   const blocks = (row.blocks || []).map((block) => {
     const cut = block.shown != null && block.shown < block.chars;
+    // Control records (thinking level, service tier) carry a block name with no
+    // text. Drawing an empty <pre> makes them look like content that failed to
+    // load; the role line alone already says "0 字符".
+    const body = block.text ? `<pre>${esc(block.text)}</pre>` : "";
     return `<div class="role">${esc(block.role)} · ${num(block.chars)} 字符${cut ? " · 已截断" : ""}</div>
-     <pre>${esc(block.text)}</pre>
+     ${body}
      ${cut ? `<div class="cut">只显示前 ${num(block.shown)} 字符</div>` : ""}`;
   }).join("") || '<p class="empty">无可读文本。</p>';
   // `chars` is what the token estimate counted; for a tool call that is the
@@ -2018,6 +2129,7 @@ function entryCard(row) {
     : "";
   return `<div class="ent">
     <div class="head">
+      ${index == null ? "" : `<span class="idx">#${num(index)}</span>`}
       <span class="k">${esc(row.kind)}</span>
       <span class="mono">${when(row.at)}</span>
       <span>${num(row.chars)} 字符${delta}</span>
@@ -2923,7 +3035,14 @@ if (/^#\/?glob/.test(location.hash) || localStorage.getItem(PAGE_KEY) === "globa
 // Deep links: `#sessions/<id>` opens that session, `#global/config/<file>`
 // opens the editor. Both make a link to what you are looking at possible.
 const sessionLink = (location.hash.match(/^#\/?sessions\/([0-9a-f-]+)/) || [])[1];
-if (sessionLink && activePage() === "sessions") openSession(sessionLink);
+// `#sessions/<id>/prompt` additionally opens the 正文 viewer, so the whole
+// prompt can be linked to (and a headless probe can reach it).
+const promptLink = /^#\/?sessions\/[0-9a-f-]+\/prompt$/.test(location.hash);
+if (sessionLink && activePage() === "sessions") {
+  openSession(sessionLink).then(() => {
+    if (promptLink && state.detail && !state.detail.error) openPromptView();
+  });
+}
 const configLink = (location.hash.match(/^#\/?global\/config\/([a-z.]+)$/) || [])[1];
 if (configLink && activePage() === "global") openConfig(configLink);
 </script>
