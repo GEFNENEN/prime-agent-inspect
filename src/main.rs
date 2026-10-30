@@ -307,6 +307,70 @@ fn serve(dir: &Path, port: u16, open: bool) -> Result<(), String> {
                     ),
                 }
             }
+            "/api/global/system-prompt" => {
+                // A named session supplies the cwd it actually ran in: comparing
+                // a prompt assembled for one directory against a session from
+                // another would be a comparison of two different prompts.
+                let session_id = query_value(query, "session");
+                let session_path = session_id
+                    .as_deref()
+                    .and_then(|id| find_session(&root, id));
+                let explicit_session = session_id.is_some();
+                let cwd = query_value(query, "cwd")
+                    .or_else(|| {
+                        session_path
+                            .as_deref()
+                            .and_then(session_cwd)
+                            .filter(|cwd| !cwd.is_empty())
+                    })
+                    .or_else(|| {
+                        // An unusable session id must not silently fall back to
+                        // this process's directory: the numbers would then
+                        // describe a prompt nobody asked about.
+                        (!explicit_session).then(|| {
+                            std::env::current_dir()
+                                .map_or_else(|_| ".".to_string(), |dir| dir.display().to_string())
+                        })
+                    })
+                    .unwrap_or_default();
+                let model = query_value(query, "model");
+                let explicit = query_value(query, "binary");
+                let binary = prime_agent_inspect::system_prompt::resolve_binary(explicit.as_deref());
+                let request = prime_agent_inspect::system_prompt::Request {
+                    binary: &binary,
+                    cwd: std::path::Path::new(&cwd),
+                    model: model.as_deref(),
+                    agent_root: &global_roots.agent,
+                };
+                let mut body = prime_agent_inspect::system_prompt::assemble(&request);
+                // Compare against a real session when one is named: the number
+                // the provider charged is the only external check available.
+                if let Some(path) = session_path {
+                    let tokens = body.get("finalTokens").and_then(serde_json::Value::as_u64);
+                    let chars = body.get("finalChars").and_then(serde_json::Value::as_u64);
+                    if let (Some(tokens), Some(chars)) = (tokens, chars) {
+                        if let Ok(session) = prime_agent_inspect::session::load(&path) {
+                            if let Some(leaf) = session.default_leaf().map(str::to_string) {
+                                body["compare"] = prime_agent_inspect::system_prompt::compare(
+                                    &session, &leaf, tokens, chars);
+                            }
+                        }
+                    }
+                } else if session_id.is_some() {
+                    body["compareError"] = serde_json::json!(
+                        "找不到唯一匹配这个 id 的会话文件（可能是短 id 有歧义，或文件不在 sessions/ 里）");
+                }
+                json_response(&body)
+            }
+            "/api/global/system-prompt/inputs" => {
+                let cwd = query_value(query, "cwd").unwrap_or_else(|| {
+                    std::env::current_dir().map_or_else(|_| ".".to_string(), |dir| dir.display().to_string())
+                });
+                json_response(&serde_json::json!({
+                    "inputs": prime_agent_inspect::system_prompt::inputs(&global_roots.agent, std::path::Path::new(&cwd)),
+                    "cwds": prime_agent_inspect::system_prompt::recent_cwds(&root, 12),
+                }))
+            }
             "/api/global/mcp-probe" => {
                 let body = prime_agent_inspect::global_state::mcp_probe(&global_roots);
                 json_response(&body)
@@ -351,6 +415,41 @@ fn open_browser(url: &str) {
     let _ = std::process::Command::new("open").arg(url).spawn();
     #[cfg(all(unix, not(target_os = "macos")))]
     let _ = std::process::Command::new("xdg-open").arg(url).spawn();
+}
+
+/// The working directory recorded in a session header.
+fn session_cwd(path: &std::path::Path) -> Option<String> {
+    let text = std::fs::read_to_string(path).ok()?;
+    let first = text.lines().next()?;
+    let header: serde_json::Value = serde_json::from_str(first).ok()?;
+    header.get("cwd").and_then(serde_json::Value::as_str).map(str::to_string)
+}
+
+/// Resolve a session id to its file, so a route can reason about it without the
+/// whole session index.
+fn find_session(root: &std::path::Path, id: &str) -> Option<std::path::PathBuf> {
+    let direct = root.join(format!("{id}.jsonl"));
+    if direct.is_file() {
+        return Some(direct);
+    }
+    // A short id is how a person refers to a session; it is only accepted when
+    // it names exactly one file. Two sessions sharing the prefix is a
+    // normal occurrence here, and picking one of them silently would put
+    // another project's numbers under this cwd.
+    let hits: Vec<std::path::PathBuf> = std::fs::read_dir(root)
+        .ok()?
+        .flatten()
+        .map(|entry| entry.path())
+        .filter(|path| {
+            path.extension().is_some_and(|ext| ext == "jsonl")
+                && path.file_stem().is_some_and(|stem| stem.to_string_lossy().starts_with(id))
+        })
+        .collect();
+    if hits.len() == 1 {
+        hits.into_iter().next()
+    } else {
+        None
+    }
 }
 
 fn query_value(query: &str, key: &str) -> Option<String> {

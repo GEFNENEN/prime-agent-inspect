@@ -294,6 +294,58 @@ button.link:focus-visible{outline:2px solid var(--accent);outline-offset:1px}
 .sheet .ent .idx{color:var(--dim);font-variant-numeric:tabular-nums;
   min-width:3.4em;text-align:right}
 
+/* ---------- 系统提示词 ---------- */
+.ptabs{display:flex;align-items:center;gap:12px;margin-bottom:10px}
+.ptabs .seg{display:flex;gap:2px;background:var(--panel2);border:1px solid var(--line);
+  border-radius:8px;padding:2px;margin-right:auto}
+.ptabs .seg button{background:none;border:0;color:var(--dim);font-family:inherit;
+  font-size:12px;padding:4px 12px;border-radius:6px;cursor:pointer}
+.ptabs .seg button:hover{color:var(--fg)}
+.ptabs .seg button.on{background:var(--accent);color:#14121a;font-weight:600}
+.pnotes{display:flex;flex-direction:column;gap:6px}
+.pnote{font-size:12px;line-height:1.5;padding:7px 10px;border-radius:7px;
+  border-left:3px solid var(--line);background:var(--panel2);color:var(--dim)}
+.pnote.added{border-left-color:#6fbf8b;color:#b9e3c9}
+.pnote.gap{border-left-color:var(--warn);color:#e3cfa9}
+.pnote.replace{border-left-color:#d4896a;color:#efc6ad}
+.pnote.runtime{border-left-color:#6aa9d4;color:#b7d7ee}
+.plist{display:flex;flex-direction:column;gap:6px}
+.player{border:1px solid var(--line);border-radius:9px;overflow:hidden;background:var(--panel2)}
+.player.open{border-color:rgba(139,127,212,.5)}
+.player-h{display:grid;grid-template-columns:14px 150px 60px 1fr 64px 64px auto;
+  gap:10px;align-items:center;padding:8px 11px;cursor:pointer;font-size:12px}
+.player-h:hover{background:rgba(139,127,212,.1)}
+.pchev{color:var(--dim);font-size:10px}
+.pname{color:var(--fg);font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.pkind{font-size:10px;letter-spacing:.04em;text-transform:uppercase;color:var(--dim);
+  border:1px solid var(--line);border-radius:999px;padding:1px 7px;text-align:center}
+.pkind.static{color:#b7d7ee;border-color:rgba(106,169,212,.5)}
+.pkind.dynamic{color:#e3cfa9;border-color:rgba(217,180,94,.45)}
+.pkind.file{color:#b9e3c9;border-color:rgba(111,191,139,.5)}
+.psrc{color:var(--dim);font-size:11px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.pnum{text-align:right;font-variant-numeric:tabular-nums;font-family:ui-monospace,Consolas,monospace}
+.pflag{font-size:10px;color:#cfc7f5;background:rgba(139,127,212,.18);
+  border:1px solid rgba(139,127,212,.45);border-radius:999px;padding:1px 7px}
+.player-b{padding:2px 11px 11px}
+.psec{margin-top:8px}
+.psec-h{font-size:12px;color:#cfc7f5;padding:5px 0;border-bottom:1px solid var(--line);
+  display:flex;justify-content:space-between;gap:12px;align-items:baseline}
+.psec-h .muted{font-size:11px;font-variant-numeric:tabular-nums}
+pre.pblock{white-space:pre-wrap;word-break:break-word;margin:6px 0 0;padding:9px 11px;
+  background:rgba(0,0,0,.28);border-radius:7px;font-size:11.5px;line-height:1.55;
+  max-height:420px;overflow:auto;color:#d7d3e6}
+pre.pfull{max-height:none}
+.pgrid{display:grid;grid-template-columns:repeat(auto-fit,minmax(210px,1fr));gap:12px}
+.pgrid .pk{color:var(--dim);font-size:11px;text-transform:uppercase;letter-spacing:.06em}
+.pgrid .pv{font-size:20px;font-weight:600;line-height:1.2;font-variant-numeric:tabular-nums;margin-top:3px}
+.pgrid .pv.hot{color:var(--warn)}
+.pgrid .pn{color:var(--dim);font-size:11px;margin-top:5px;line-height:1.45}
+.pcwd{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+.pcwd input{flex:1;min-width:280px;background:var(--panel2);border:1px solid var(--line);
+  color:var(--fg);font-family:ui-monospace,Consolas,monospace;font-size:12px;
+  padding:6px 10px;border-radius:7px}
+.pcwd input:focus{outline:none;border-color:var(--accent)}
+
 /* ---------- 顶层页面：会话 / 全局 ---------- */
 #pages{display:flex;gap:2px;background:var(--panel2);border:1px solid var(--line);
   border-radius:8px;padding:2px}
@@ -743,6 +795,19 @@ function renderDetail(d) {
 
   $("detail").innerHTML = overview + tabbar + panels.join("");
   setupComposition(d, compItems);
+  // "固定开销里到底是什么" is the question the donut cannot answer; it opens the
+  // global prompt page with this session selected, so the comparison is made
+  // against the session the number came from.
+  const fixedLink = document.querySelector("[data-fixed]");
+  if (fixedLink) fixedLink.onclick = () => {
+    P.session = fixedLink.dataset.fixed;
+    P.data = null; P.open.clear(); P.error = null;
+    setPage("global");
+    G.section = "prompt";
+    localStorage.setItem(GS_KEY, G.section);
+    history.replaceState(null, "", "#global/prompt?session=" + fixedLink.dataset.fixed);
+    renderGlobal();
+  };
   setupTabs(d);
   setupRefinements(d);
   // Bound here, not once: the panel is replaced wholesale on every session.
@@ -2431,6 +2496,8 @@ function setupFilter() {
 
 const PAGE_KEY = "prime-agent-inspect.page";
 const GS_KEY = "prime-agent-inspect.gsection";
+const PROMPT_VIEW_KEY = "prime-agent-inspect.promptView";
+const PROMPT_CWD_KEY = "prime-agent-inspect.promptCwd";
 
 const G = {
   data: null, busy: false,
@@ -2447,6 +2514,7 @@ const GSECTIONS = [
   ["memory", "记忆"],
   ["skills", "技能"],
   ["models", "模型与 MCP"],
+  ["prompt", "系统提示词"],
   ["runtime", "运行与日志"],
 ];
 
@@ -2614,9 +2682,10 @@ function renderGlobal() {
       + `<span>${label}</span>${n ? `<span class="n">${num(n)}</span>` : ""}</button>`;
   }).join("");
   const views = { overview: gOverview, config: gConfig, memory: gMemory,
-    skills: gSkills, models: gModels, runtime: gRuntime };
+    skills: gSkills, models: gModels, prompt: gPrompt, runtime: gRuntime };
   $("gbody").innerHTML = (views[G.section] || gOverview)();
   if (G.section === "memory") filterMemory();
+  if (G.section === "prompt") setupPrompt();
 }
 
 // ------------------------------------------------------------- 概览
@@ -2924,6 +2993,214 @@ function gRuntime() {
     </div>`;
 }
 
+// ------------------------------------------------------------- 系统提示词
+
+/// The assembled prompt, fetched on demand: it takes a subprocess and it is
+/// per-working-directory, so it cannot ride along in the global payload.
+const P = {
+  data: null, busy: false, error: null,
+  /// "final" is the concatenated text; "blocks" is the layer stack.
+  view: localStorage.getItem(PROMPT_VIEW_KEY) || "blocks",
+  /// Set by a `#global/prompt/<layer>` deep link; consumed once data arrives.
+  pendingLayer: null,
+  cwd: localStorage.getItem(PROMPT_CWD_KEY) || "",
+  /// Set from a `#global/prompt` deep link's `session` part, if any.
+  session: null,
+  /// Working directories found in recent sessions, for the picker.
+  cwds: null, inputs: null,
+  open: new Set(),
+};
+
+function gPrompt() {
+  // The deep link names a layer; if the fetch has not landed yet there is
+  // nothing to open, so the flag is applied here, once, when data arrives.
+  if (P.pendingLayer && P.data) {
+    const index = (P.data.layers || []).findIndex((layer) => layer.name === P.pendingLayer);
+    if (index >= 0) P.open.add(P.data.layers[index].name + ":" + index);
+    P.pendingLayer = null;
+  }
+  if (P.error) {
+    return `<div class="card"><h2>读不到系统提示词</h2>
+      <p class="muted">${esc(P.error)}</p></div>`;
+  }
+  if (!P.data) {
+    return `<p class="muted">正在让 prime-agent 组装提示词……</p>`;
+  }
+  const d = P.data;
+  const layers = d.layers || [];
+  const cached = layers.filter((layer) => layer.cached).length;
+  const tabs = [["blocks", "分块阅读"], ["final", "最终拼凑"]];
+  const body = P.view === "final" ? gPromptFinal(d) : gPromptBlocks(d);
+
+  return ghero([
+    [num(d.finalChars), "最终字符", `${num(d.basePromptChars)} 来自 prime-agent`],
+    [num(d.finalTokens), "估算 token", `按 CJK 比例校准`],
+    [String(layers.length), "层", `${cached} 层进缓存前缀`],
+    [num((d.notes || []).length), "条说明", "缺什么、补了什么"],
+  ])
+  + gPromptCompare(d)
+  + `<div class="card"><h2>工作目录 <span class="muted" style="text-transform:none;letter-spacing:0">换了目录，AGENTS.md 与日期行都会变</span></h2>
+      <div class="pcwd">
+        <input id="p-cwd" list="p-cwd-list" value="${esc(P.cwd || d.cwd || "")}"
+          placeholder="例如 H:/Work/prime-agent-inspect">
+        <datalist id="p-cwd-list">${(P.cwds || []).map((row) =>
+          `<option value="${esc(row.cwd)}">${esc(row.session || "")}</option>`).join("")}</datalist>
+        <button class="mini" id="p-cwd-go">重新组装</button>
+        <span class="muted" style="font-size:11px">${esc(d.binary || "")}</span>
+      </div></div>`
+  + `<div class="card">
+      <div class="ptabs">
+        <div class="seg">${tabs.map(([id, label]) =>
+          `<button data-pview="${id}" class="${P.view === id ? "on" : ""}">${label}</button>`).join("")}</div>
+        <span class="muted mono" style="font-size:11px">${esc(d.cwd || "")}</span>
+        <button class="mini" id="p-copy">复制全文</button>
+      </div>
+      <div class="pnotes">${(d.notes || []).map((note) =>
+        `<div class="pnote ${esc(note.kind)}">${esc(note.text)}</div>`).join("")}</div>
+    </div>`
+  + body;
+}
+
+function gPromptCompare(d) {
+  const c = d.compare;
+  if (d.compareError) {
+    return `<div class="card"><h2>与实测对照 <span class="muted" style="text-transform:none;letter-spacing:0">没有可用会话</span></h2>
+      <p class="pnote gap">${esc(d.compareError)}</p></div>`;
+  }
+  if (!c) {
+    return `<div class="card"><h2>与实测对照 <span class="muted" style="text-transform:none;letter-spacing:0">从会话进入时自动对照</span></h2>
+      <p class="muted">这里没有指定会话，所以只有估算。会话里 provider 报的 prompt
+      等于提示词加工具定义，是另一个量；能核对的是「字符 / token」是否落在正常区间。</p></div>`;
+  }
+  const ratio = c.impliedCharsPerToken || 0;
+  const tone = c.tone || "unknown";
+  return `<div class="card"><h2>与实测对照
+      <span class="muted" style="text-transform:none;letter-spacing:0">${esc(c.session || "")} · ${esc(c.cwd || "")}</span></h2>
+    <div class="pgrid">
+      <div><div class="pk">provider 实测</div>
+        <div class="pv">${num(c.measuredTokens)} <span class="muted">tok</span></div>
+        <div class="pn">${esc(c.measuredFrom || "")}，${num(c.samples)} 个采样点，含工具定义</div></div>
+      <div><div class="pk">本页提示词</div>
+        <div class="pv">${num(c.estimatedTokens)} <span class="muted">tok</span></div>
+        <div class="pn">${num(c.promptChars)} 字符，按 CJK 比例折算</div></div>
+      <div><div class="pk">隐含 字符/实测token</div>
+        <div class="pv ${tone === "warn" ? "hot" : ""}">${ratio ? ratio.toFixed(2) : "—"}</div>
+        <div class="pn">&gt;8 说明实测没算全；4–8 说明工具定义占大头</div></div>
+    </div>
+    <p class="pnote ${tone === "warn" ? "gap" : tone === "ok" ? "added" : "runtime"}"
+      style="margin-top:10px">${esc(c.verdict || "")}</p>
+    <p class="pnote runtime" style="margin-top:6px">${esc(c.explain || "")}</p>
+    <p class="pnote runtime" style="margin-top:6px">${esc(c.estimateNote || "")}</p></div>`;
+}
+
+function gPromptBlocks(d) {
+  const layers = d.layers || [];
+  return `<div class="card"><h2>按层读 <span class="muted" style="text-transform:none;letter-spacing:0">点标题展开分节；顺序就是发送顺序</span></h2>
+    <div class="plist">${layers.map((layer, index) => {
+      const key = layer.name + ":" + index;
+      const open = P.open.has(key);
+      const sections = (layer.sections || []).map((section) =>
+        `<div class="psec">
+           <div class="psec-h">${esc(section.title)}
+             <span class="muted">${num(section.chars)} 字符 · ~${num(section.tokens)} tok</span></div>
+           <pre class="pblock">${esc(section.text)}</pre>
+         </div>`).join("");
+      return `<div class="player${open ? " open" : ""}">
+        <div class="player-h" data-player="${esc(key)}">
+          <span class="pchev">${open ? "▾" : "▸"}</span>
+          <span class="pname mono">${esc(layer.name)}</span>
+          <span class="pkind ${esc(layer.kind)}">${esc(layer.kind)}</span>
+          <span class="psrc mono" title="${esc(layer.source || "")}">${esc(layer.source || "")}</span>
+          <span class="pnum">${num(layer.chars)}</span>
+          <span class="pnum muted">~${num(layer.tokens)}</span>
+          ${layer.cached ? `<span class="pflag">缓存前缀</span>` : ""}
+        </div>
+        ${open ? `<div class="player-b">
+          <p class="pnote runtime" style="margin:0 0 8px">按 <code>#</code> / <code>##</code> 分节；标题行不计入分节字符数，而层字符数包含它。</p>
+          ${sections || `<p class="muted">（空）</p>`}</div>` : ""}
+      </div>`;
+    }).join("")}</div></div>`;
+}
+
+function gPromptFinal(d) {
+  const text = d.prompt || "";
+  return `<div class="card"><h2>最终拼凑 <span class="muted" style="text-transform:none;letter-spacing:0">${num(d.finalChars)} 字符 · ~${num(d.finalTokens)} token，就是这一整块</span></h2>
+    <pre class="pblock pfull">${esc(text)}</pre></div>`;
+}
+
+function setupPrompt() {
+  if (!P.data && !P.busy && !P.error) pLoadPrompt();
+  const body = $("gbody");
+  body.querySelectorAll("[data-pview]").forEach((button) => {
+    button.onclick = () => {
+      P.view = button.dataset.pview;
+      localStorage.setItem(PROMPT_VIEW_KEY, P.view);
+      body.innerHTML = gPrompt();
+      setupPrompt();
+    };
+  });
+  body.querySelectorAll("[data-player]").forEach((row) => {
+    row.onclick = () => {
+      const key = row.dataset.player;
+      if (P.open.has(key)) P.open.delete(key); else P.open.add(key);
+      const name = key.split(":")[0];
+      history.replaceState(null, "", P.open.has(key)
+        ? `#global/prompt/${name}` : "#global/prompt");
+      body.innerHTML = gPrompt();
+      setupPrompt();
+    };
+  });
+  const copy = $("p-copy");
+  if (copy) copy.onclick = async () => {
+    try {
+      await navigator.clipboard.writeText(P.data.prompt || "");
+      copy.textContent = "已复制 " + num((P.data.prompt || "").length) + " 字符";
+      setTimeout(() => { copy.textContent = "复制全文"; }, 1800);
+    } catch (error) {
+      copy.textContent = "复制失败";
+    }
+  };
+}
+
+async function loadCwds() {
+  if (P.cwds) return;
+  try {
+    const data = await getJSON("/api/global/system-prompt/inputs"
+      + (P.cwd ? "?cwd=" + encodeURIComponent(P.cwd) : ""));
+    P.cwds = data.cwds || [];
+    P.inputs = data.inputs || [];
+  } catch (error) {
+    P.cwds = [];
+  }
+}
+
+async function pLoadPrompt() {
+  if (P.busy) return;
+  P.busy = true;
+  P.error = null;
+  const body = $("gbody");
+  if (!P.data) body.innerHTML = `<p class="muted">正在让 prime-agent 组装提示词……</p>`;
+  try {
+    await loadCwds();
+    const query = new URLSearchParams();
+    if (P.cwd) query.set("cwd", P.cwd);
+    if (P.session) query.set("session", P.session);
+    P.data = await getJSON("/api/global/system-prompt" + (query.toString() ? "?" + query : ""));
+    if (P.data.error) { P.error = P.data.error; P.data = null; }
+    if (P.data && !P.cwd) {
+      P.cwd = P.data.cwd || "";
+      localStorage.setItem(PROMPT_CWD_KEY, P.cwd);
+    }
+    body.innerHTML = gPrompt();
+    setupPrompt();
+  } catch (error) {
+    P.error = String(error.message || error);
+    body.innerHTML = gPrompt();
+  } finally {
+    P.busy = false;
+  }
+}
+
 // ------------------------------------------------------------- 内容查看
 
 async function openHarnessEntry(kind, id) {
@@ -3204,7 +3481,16 @@ refreshList();
 // used. The session list still refreshes in the background either way.
 // `#global/config` opens both the page and the section, which makes a
 // bookmark (or a screenshot probe) land exactly where it should.
-const hashSection = (location.hash.match(/^#\/?global\/([a-z]+)/) || [])[1];
+const hashSection = (location.hash.match(/^#\/?global\/([a-z-]+)/) || [])[1];
+const hashLayer = (location.hash.match(/^#\/?global\/prompt\/([a-z-]+)/) || [])[1];
+if (hashLayer) P.pendingLayer = hashLayer;
+// `#global/prompt?session=<id>` compares the assembled prompt against that
+// session's measured overhead, which is the only external check available.
+const hashSession = (location.hash.match(/^#\/?global\/prompt\?[^#]*session=([0-9a-f-]+)/) || [])[1];
+if (hashSession) P.session = hashSession;
+// `&view=final` / `&view=blocks` makes the tab linkable too.
+const hashView = (location.hash.match(/[?&]view=(final|blocks)/) || [])[1];
+if (hashView) P.view = hashView;
 if (hashSection && GSECTIONS.some(([id]) => id === hashSection)) {
   G.section = hashSection;
   localStorage.setItem(GS_KEY, G.section);

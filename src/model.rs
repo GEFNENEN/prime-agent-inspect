@@ -22,6 +22,16 @@ impl Chars {
         self.cjk + self.other
     }
 
+    /// Count a piece of text that never went through a session file. The system
+    /// prompt is assembled outside the transcript, so it needs the same split
+    /// without an [`Entry`] to hang it on.
+    #[must_use]
+    pub fn from_text(text: &str) -> Self {
+        let mut chars = Self::default();
+        chars.add(text);
+        chars
+    }
+
     fn add(&mut self, text: &str) {
         for ch in text.chars() {
             if is_cjk(ch) {

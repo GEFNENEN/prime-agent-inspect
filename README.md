@@ -147,7 +147,7 @@ fixed overhead 15865 tokens (measured from 217 point(s), not in the session file
 
 ### 全局页
 
-左侧是分区：概览 / 配置 / 记忆 / 技能 / 模型与 MCP / 运行与日志。它读的是
+左侧是分区：概览 / 配置 / 记忆 / 技能 / 模型与 MCP / 系统提示词 / 运行与日志。它读的是
 `<agent>`（默认 `~/.prime/agent`）里的真实文件，不是会话记录里的副本。
 
 - **概览**：6 个头条数字（工作区占用、会话数、技能数、模型数、MCP 数、遥测运行数），
@@ -164,6 +164,38 @@ fixed overhead 15865 tokens (measured from 217 point(s), not in the session file
   文件数、体积，带 Python 模块的会标出来；点开看 SKILL.md 全文与文件清单。
 - **模型与 MCP**：默认模型与子代理/辅助/看图/备用模型，供应商表（点开展开模型：上下文窗口、
   输入类型、思考档），以及已配置的 MCP 服务与目录就绪数。
+- **系统提示词**：把「每轮除对话之外还发了什么」拼出来。层不是手抄的，而是让
+  prime-agent 自己回答：`prime-agent prompt --json --cwd <目录>` 会按新开一个根会话的方式
+  组装提示词，并返回逐层的名字、来源、字符数与最终文本。本页照着这个顺序切开，
+  再补上它不解析的一层：
+
+  1. `core` / `usage` / `opinionated` —— 编译进二进制的内置层，随版本走
+  2. `packages` —— 内核启动时列的预装包
+  3. `project-context` —— `AGENTS.md` / `CLAUDE.md` 发现结果（本机有些目录有）
+  4. `skills-inventory` —— 技能清单，格式与 `<available_skills>` 一致
+  5. `environment` —— 日期与工作目录
+  6. `session-role` —— 递归深度与 `bash()` 的返回约定
+  7. `appended-prompt` —— `<agent>/APPEND_SYSTEM.md`，**这一层是本页补的**
+
+  两个视图：**分块阅读**按层展开、层内再按 `#` / `##` 分节（每节带字符与 token），
+  **最终拼凑**是拼好的整块文本，可一键复制。点左边分区标题会写进 `#global/prompt/<层>`，
+  两层状态都可链接。
+
+  **为什么 APPEND_SYSTEM.md 要补**：把这份文件放在 `cwd/`、`cwd/.prime/`、
+  `cwd/.prime/agent/`、`cwd/.agents/` 四个位置分别试过，`prime-agent prompt` 都没读它；
+  但真实会话的系统提示词末尾确实有它的内容（`# APPEND_SYSTEM`、`## 准则` 这些段落）。
+  所以它由本页追加，并在页面上标成「本页补的」，不冒充命令输出。
+
+  **与实测对照**：会话里 provider 报的 prompt（`input + cacheRead + cacheWrite`）等于
+  **系统提示词 + 工具定义**，是另一个量，直接相减会把猜测写成测量。这里只报
+  「字符 / 实测 token」：低于 4 说明提示词文字就可能占掉大头；4–8 说明工具定义占相当一部分；
+  **大于 8 说明该会话的 usage 没把整个 prompt 计进去**（本机会话实测有 13.35 与 20.63 两例，
+  对应供应商少报）。同时明确写出工具定义是 JSON schema、不在提示词文本里，本页不估算它。
+
+  **代价**：每次进入该分区要起一个子进程（约 0.1–0.7 s），所以这一页是按需取，
+  不随 `/api/global` 一起下发。工作目录可以改，换了目录 AGENTS.md、日期行、
+  技能清单是否出现都会变。
+
 - **运行与日志**：遥测事件计数（含轮转文件）、运行次数/错误数/p50/最长/模型调用/重试、
   日志文件列表（点「末尾」看最后 400 行）、客户端错误、已安装的扩展/技能包/主题/克隆仓库。
 
@@ -325,6 +357,12 @@ usage 只报一个总数，看不出推理才是大头——想压生成量，�
   另 153 行干脆没有 `totalTokens`。
   所有**求和**类统计（缓存命中率、按模型的 prompt 合计、每日 prompt）都跳过这些行，
   `peak` 仍然用 `totalTokens` 兜底（它落在曲线上，是这些行里唯一没坏的数字）。
+- **工具定义不在系统提示词里**。工具是随请求单独发的一组 JSON schema，按模型生成；
+  「系统提示词」页只覆盖提示词文本，因此它给出的 token 数会比 provider 报的 prompt 小，
+  差额里既有工具定义也有估算误差。想拆开必须先拿到请求体，目前没有这条路径。
+- **`prime-agent prompt` 不解析 `APPEND_SYSTEM.md`**（四个候选路径都试过）。真实会话里有这一层，
+  所以页面上那一段是本页补的，并明确标注；换 prime-agent 版本后如果它开始解析，
+  这一层会出现两次，届时以「层」列表里是否有 `appended-prompt` 之外的同源项为判据。
 - **子代理用量不能按行相加**。`child_usage_attributed` 一行是子代理的一次调用，
   `aggregateUsage.totalTokens` 字段冻结在子会话第一次调用时（一个后来花掉 9,300 万的子会话
   至今仍报 12 万）。子会话的累计值取自最后一行 `aggregateUsage` 的各分项，并按 `targetId` 去重。

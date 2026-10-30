@@ -13,5 +13,6 @@ pub mod model;
 pub mod overhead;
 pub mod session;
 pub mod http;
+pub mod system_prompt;
 pub mod token_est;
 pub mod web;
