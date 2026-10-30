@@ -168,7 +168,10 @@ tbody tr.hot td:first-child{color:var(--fg)}
 #status{padding:6px 20px;font-size:12px;color:var(--dim);border-bottom:1px solid var(--line)}
 #status.err{color:var(--bad)}
 canvas{width:100%;height:auto;display:block}
-#chart{cursor:crosshair}
+#chart{cursor:pointer}
+#timeline-body tr{cursor:pointer}
+#timeline-body tr:hover td{background:rgba(139,127,212,.10)}
+#timeline-body tr.hot td{background:rgba(139,127,212,.16)}
 .hint{color:var(--dim);font-size:12px;margin-top:8px}
 .tlctl{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:10px;
   font-size:12px;color:var(--dim)}
@@ -223,7 +226,10 @@ canvas{width:100%;height:auto;display:block}
 .modal.open{display:flex}
 .sheet{background:var(--panel);border:1px solid var(--line);border-radius:12px;
   width:min(1080px,100%);max-height:100%;display:flex;flex-direction:column;
-  box-shadow:0 24px 80px rgba(0,0,0,.6)}
+  box-shadow:0 24px 80px rgba(0,0,0,.6);min-height:0}
+/* The two-pane view needs a bounded height, or `flex:1` on the panes grows the
+   sheet past the viewport and the panes never scroll. */
+.sheet.wide{height:100%}
 .sheet header{position:static;background:var(--panel);border-bottom:1px solid var(--line);
   border-radius:12px 12px 0 0;padding:12px 16px;gap:12px}
 .sheet header h3{margin:0;font-size:14px;font-weight:600;display:flex;
@@ -247,6 +253,33 @@ canvas{width:100%;height:auto;display:block}
   text-transform:uppercase;margin:6px 0 3px}
 .ent .cut{color:var(--warn);font-size:11px;margin-top:4px}
 .sheet .empty{color:var(--dim);padding:24px 0;text-align:center;font-size:13px}
+/* Compaction diff: two documents side by side, each scrolling on its own so a
+   reader can hold one position while the other moves. */
+.sheet.wide{width:min(1500px,100%);height:100%}
+.cmp-hero{display:grid;grid-template-columns:1fr auto 1fr;gap:0;
+  border:1px solid var(--line);border-radius:8px;background:var(--panel2);
+  margin:12px 0 10px;overflow:hidden}
+.cmp-hero>div{padding:9px 14px;min-width:0}
+.cmp-hero>div.mid{border-left:1px solid var(--line);border-right:1px solid var(--line);
+  display:flex;align-items:center;justify-content:center;color:var(--dim);font-size:11px}
+.cmp-hero .k{color:var(--dim);font-size:11px;display:flex;gap:8px;align-items:baseline}
+.cmp-hero .v{font-size:20px;font-weight:600;font-variant-numeric:tabular-nums;
+  display:flex;align-items:baseline;gap:6px}
+.cmp-hero .v small{font-size:11px;color:var(--dim);font-weight:400}
+.cmp-hero .sub{color:var(--dim);font-size:11px;font-variant-numeric:tabular-nums}
+.cmp-panes{display:grid;grid-template-columns:1fr 1fr;gap:10px;min-height:0;flex:1;
+  padding-bottom:10px}
+.cmp-pane{border:1px solid var(--line);border-radius:8px;display:flex;
+  flex-direction:column;min-height:0;overflow:hidden;background:var(--panel2)}
+.cmp-pane>header{position:static;background:var(--panel);border-bottom:1px solid var(--line);
+  padding:7px 10px;display:flex;gap:8px;align-items:baseline;font-size:11px;color:var(--dim);
+  border-radius:0}
+.cmp-pane>header b{color:var(--fg);font-size:12px;font-weight:600}
+.cmp-pane .scroll{overflow:auto;padding:0 10px 8px;flex:1;min-height:0}
+.cmp-pane .ent{padding:7px 0}
+.cmp-pane .ent .head{font-size:10px}
+.cmp-pane .ent pre{max-height:none;overflow:visible;font-size:11px;line-height:1.5;
+  padding:6px 8px}
 /* A button that reads as a link: it acts on the number beside it, so it must
    not compete with the number. */
 button.link{background:rgba(139,127,212,.14);border:1px solid rgba(139,127,212,.45);
@@ -720,6 +753,139 @@ function renderDetail(d) {
 /// Refinement rows fetch their body on click: the detail payload carries the
 /// summary and the edit titles, while rationale + expected outcome + edit
 /// bodies are 117 KB for this session and would be paid on every session click.
+// ------------------------------------------- 压缩前后对照（两栏）
+//
+// The timeline dot and the table row are two views of the same compaction, so
+// both open this. Left is the prompt that was replaced, right is what replaced
+// it — the same assembler the donut uses, so the two panes and the numbers on
+// the card cannot disagree.
+// One in-flight flag per pane: both sides load at once, and a single shared
+// lock silently dropped whichever request lost the race (the right pane sat on
+// "载入中…" forever).
+const cmpView = { el: null, id: null, loading: {}, sides: {} };
+
+function cmpPaneHTML(side, label) {
+  return `<div class="cmp-pane" data-side="${side}">
+      <header><b>${label}</b><span class="pane-meta"></span>
+        <span class="sp"></span><button class="mini" data-more="${side}">载入更多</button></header>
+      <div class="scroll" id="cmp-${side}"><p class="empty">载入中…</p></div>
+    </div>`;
+}
+
+function cmpViewerEl() {
+  if (cmpView.el) return cmpView.el;
+  const wrap = document.createElement("div");
+  wrap.className = "modal";
+  wrap.id = "cmp-viewer";
+  wrap.innerHTML = `<div class="sheet wide" role="dialog" aria-modal="true">
+      <header>
+        <h3>压缩前后 <span class="muted" style="text-transform:none;letter-spacing:0" id="cmp-when"></span></h3>
+        <span class="spacer" style="flex:1"></span>
+        <button id="cmp-close">关闭 (Esc)</button>
+      </header>
+      <div class="body" style="display:flex;flex-direction:column;min-height:0">
+        <div class="cmp-hero" id="cmp-hero"></div>
+        <div class="cmp-panes">
+          ${cmpPaneHTML("before", "压缩前 · 模型当时手里的 prompt")}
+          ${cmpPaneHTML("after", "压缩后 · 下一轮实际发送的 prompt")}
+        </div>
+      </div>
+    </div>`;
+  document.body.appendChild(wrap);
+  wrap.addEventListener("click", (event) => {
+    if (event.target === wrap) wrap.classList.remove("open");
+    const more = event.target.closest("[data-more]");
+    if (more) loadCmp(more.dataset.more);
+  });
+  wrap.querySelector("#cmp-close").addEventListener("click", () => wrap.classList.remove("open"));
+  cmpView.el = wrap;
+  return wrap;
+}
+
+function closeCmpView() {
+  if (cmpView.el) cmpView.el.classList.remove("open");
+}
+
+async function openCmpView(id) {
+  if (!id) return;
+  hideTip();
+  cmpView.id = id;
+  cmpView.sides = { before: 0, after: 0 };
+  cmpView.loading = {};
+  const el = cmpViewerEl();
+  el.classList.add("open");
+  el.querySelector("#cmp-hero").innerHTML = '<p class="empty" style="grid-column:1/-1">载入中…</p>';
+  for (const side of ["before", "after"]) {
+    el.querySelector(`#cmp-${side}`).innerHTML = '<p class="empty">载入中…</p>';
+  }
+  // One call carries the totals for both sides; both panes then know their
+  // own size before the second one is asked for.
+  await Promise.all([loadCmp("before"), loadCmp("after")]);
+}
+
+async function loadCmp(side) {
+  if (!cmpView.id || cmpView.loading[side]) return;
+  cmpView.loading[side] = true;
+  const el = cmpViewerEl();
+  const pane = el.querySelector(`.cmp-pane[data-side="${side}"]`);
+  const scroll = el.querySelector(`#cmp-${side}`);
+  const button = pane.querySelector("[data-more]");
+  button.disabled = true;
+  try {
+    const offset = cmpView.sides[side] || 0;
+    const url = `/api/compaction?id=${encodeURIComponent(state.selected)}`
+      + `&entry=${encodeURIComponent(cmpView.id)}&side=${side}`
+      + `&offset=${offset}&limit=1000&maxChars=1200000`;
+    const data = await getJSON(url);
+    if (data.error) throw new Error(data.error);
+    if (offset === 0) {
+      scroll.innerHTML = "";
+      renderCmpHero(el, data);
+      el.querySelector("#cmp-when").textContent = when(data.at);
+    }
+    const rows = data.rows || [];
+    scroll.insertAdjacentHTML("beforeend",
+      rows.map((row, i) => entryCard(row, offset + i + 1)).join("")
+      || '<p class="empty">这一侧没有条目。</p>');
+    const next = data.next == null ? data.total : data.next;
+    cmpView.sides[side] = next;
+    const total = data[side] || { entries: 0, tokens: 0 };
+    pane.querySelector(".pane-meta").textContent =
+      `${num(total.entries)} 条 · ${num(total.tokens)} tokens · 已显示 ${num(next)}`;
+    button.style.display = next < total.entries ? "" : "none";
+    button.disabled = false;
+  } catch (error) {
+    scroll.insertAdjacentHTML("beforeend",
+      `<p class="empty">载入失败：${esc(error.message)}</p>`);
+  } finally {
+    cmpView.loading[side] = false;
+  }
+}
+
+function renderCmpHero(el, data) {
+  const before = data.before, after = data.after;
+  const delta = before.tokens ? (before.tokens - after.tokens) / before.tokens : 0;
+  const hero = el.querySelector("#cmp-hero");
+  if (!hero) return;
+  // A compaction can make the prompt bigger — a fresh summary of a short tail
+  // costs more than it removed. 4 of the last 200 in this corpus do. A hard
+  // minus sign would present that as an ordinary shrink.
+  const sign = delta < 0 ? "+" : "−";
+  const cls = delta < 0 ? "bad" : "ok";
+  hero.innerHTML = `<div>
+      <div class="k">压缩前</div>
+      <div class="v">${num(before.tokens)} <small>tokens</small></div>
+      <div class="sub">${num(before.entries)} 条 · ${num(before.chars)} 字符</div>
+    </div>
+    <div class="mid" style="color:${delta < 0 ? "var(--bad)" : "var(--dim)"}">${sign}${pct(Math.abs(delta))}</div>
+    <div>
+      <div class="k">压缩后 <span>其中摘要 ${num(data.summaryTokens)} tokens</span></div>
+      <div class="v">${num(after.tokens)} <small>tokens</small></div>
+      <div class="sub">${num(after.entries)} 条 · ${num(after.chars)} 字符
+        · provider 当时报 ${num(data.tokensBefore)}</div>
+    </div>`;
+}
+
 // ------------------------------------------------ 正文全文（下一轮会发出去什么）
 //
 // Different question from the bucket viewer: that one explains a slice of the
@@ -964,7 +1130,7 @@ function timelineCards(d) {
       <th>间隔调用 <span class="q" data-q="turns">?</span></th>
     </tr></thead><tbody id="timeline-body"></tbody></table></div>
     <p class="hint">倒序排列，最新在上。「间隔调用」数的是模型请求次数，小于 10 表示在连环压缩——这是要排查的形态。
-      悬停图表上的点或这里的任意一行，看这一次压缩的完整信息。
+      悬停看图；<b>点击</b>图表上的点或这里的任意一行，左右两栏对照压缩前后的内容。
       点列名旁的小问号看这一列到底在数什么。</p></div>`;
 }
 
@@ -1645,6 +1811,7 @@ function dismissTipOnScroll() {
     hideTip();
     closeViewer();
     if (promptView.el) promptView.el.classList.remove("open");
+    closeCmpView();
   });
 }
 
@@ -1875,6 +2042,10 @@ function pointTipHTML(p, d) {
   }
   push("间隔轮数", p.turns == null ? "—" : num(p.turns) + " 轮",
     p.turns != null && p.turns < 10 ? "bad" : "");
+  // The tooltip is the only place that says the dots are clickable; the hint
+  // under the table is below 200 rows of scroll.
+  rows.push('<div class="r" style="margin-top:6px;color:var(--accent)">' +
+    "<span>点击</span><b>查看压缩前后两栏对照</b></div>");
 
   // The estimate lives in `checks`, keyed by compaction id. Its `measured` is
   // the same number as `after` — one usage, read twice — so showing both would
@@ -1978,6 +2149,11 @@ function setupTimelineHover(d) {
 
   canvas.addEventListener("mousemove", show);
   canvas.addEventListener("mouseleave", hideTip);
+  // Clicking a point opens the same two-pane view the table row opens.
+  canvas.addEventListener("click", (event) => {
+    const point = state.chartTimeline[nearestPoint(canvas, event)];
+    if (point) openCmpView(point.id);
+  });
 
   // The table is the same series row by row. Hovering a row gets the same box
   // (it carries the estimate-vs-measured error, which no column shows) and
@@ -2007,6 +2183,12 @@ function setupTimelineHover(d) {
     showTip(pointTipHTML(point, d), event, clearMarker);
   });
   body.addEventListener("mouseleave", hideTip);
+  // Same action as the chart point: the row is the series, one compaction per
+  // row. Clicks are delegated because renderTimelineRows rewrites the body.
+  body.addEventListener("click", (event) => {
+    const row = event.target.closest("tr[data-id]");
+    if (row) openCmpView(row.dataset.id);
+  });
 }
 
 // ------------------------------------------------------------- content viewer
@@ -2133,7 +2315,7 @@ function entryCard(row, index) {
       <span class="k">${esc(row.kind)}</span>
       <span class="mono">${when(row.at)}</span>
       <span>${num(row.chars)} 字符${delta}</span>
-      <span>~${num(row.tokens)} tokens</span>
+      ${row.tokens ? `<span>~${num(row.tokens)} tokens</span>` : ""}
       <span class="sp"></span>
       <span class="mono">${esc(row.id.slice(0, 8))}</span>
     </div>
@@ -3038,9 +3220,20 @@ const sessionLink = (location.hash.match(/^#\/?sessions\/([0-9a-f-]+)/) || [])[1
 // `#sessions/<id>/prompt` additionally opens the 正文 viewer, so the whole
 // prompt can be linked to (and a headless probe can reach it).
 const promptLink = /^#\/?sessions\/[0-9a-f-]+\/prompt$/.test(location.hash);
+// `#sessions/<id>/cmp/<entry>` opens the compaction diff, which also makes the
+// view linkable from a ticket or a message.
+const cmpLink = (location.hash.match(/^#\/?sessions\/[0-9a-f-]+\/cmp\/([0-9a-zA-Z-]+)$/) || [])[1];
+// `#sessions/<id>/tab/tl` opens a tab directly; the tab bar writes this hash
+// back, so a link always names what is on screen.
+const tabLink = (location.hash.match(/^#\/?sessions\/[0-9a-f-]+\/tab\/([a-z]+)$/) || [])[1];
 if (sessionLink && activePage() === "sessions") {
   openSession(sessionLink).then(() => {
     if (promptLink && state.detail && !state.detail.error) openPromptView();
+    if (cmpLink && state.detail && !state.detail.error) openCmpView(cmpLink);
+    if (tabLink) {
+      const button = document.querySelector(`#tabs button[data-panel="${tabLink}"]`);
+      if (button) button.click();
+    }
   });
 }
 const configLink = (location.hash.match(/^#\/?global\/config\/([a-z.]+)$/) || [])[1];

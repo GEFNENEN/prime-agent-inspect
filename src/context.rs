@@ -299,7 +299,20 @@ fn assemble_at(session: &Session, path: &[usize], end: usize, marks: &Marks) -> 
         })
         .collect();
     assembly.tools.sort_by_key(|share| std::cmp::Reverse(share.tokens));
+    // `kept` is in file order, which puts the compaction between the tail it
+    // retained and the turns after it. The model does not see that order:
+    // `build_session_context` emits the summary, then the retained tail, then
+    // the newer turns. Anything that reads this list as a document (the prompt
+    // viewer, the two-pane compaction diff) has to get the reading order.
     assembly.retained = kept;
+    if let Some(at) = assembly
+        .retained
+        .iter()
+        .position(|&index| matches!(session.entries[index].kind, Kind::Compaction { .. }))
+    {
+        let summary = assembly.retained.remove(at);
+        assembly.retained.insert(0, summary);
+    }
 
     // Estimating each tool separately and summing does not land on the
     // toolResult component's total (rounding differs), and the UI shows both
@@ -397,6 +410,82 @@ pub struct CompactionPoint {
     pub notice_copies: u64,
     pub notice_tokens: u64,
     pub gap_turns: u64,
+}
+
+/// What one compaction changed: the prompt it replaced and the prompt it left.
+///
+/// `before` is the assembly as of the entry *before* the compaction, which is
+/// the exact document the model had in hand when summarisation was triggered;
+/// `after` is the assembly at the compaction itself. Both come from the same
+/// assembler as the donut, so the two panes cannot disagree with the numbers on
+/// the card above them.
+#[derive(Debug, Clone, Default)]
+pub struct CompactionSides {
+    pub id: String,
+    pub at: i64,
+    pub timestamp: String,
+    pub tokens_before: u64,
+    /// Index into `Session::entries`, in reading order.
+    pub before: Vec<usize>,
+    pub after: Vec<usize>,
+    pub before_tokens: u64,
+    pub after_tokens: u64,
+    pub before_chars: u64,
+    pub after_chars: u64,
+    pub summary_tokens: u64,
+    pub first_kept: String,
+    pub gap_turns: u64,
+}
+
+/// Bracket one compaction: the prompt before it and the prompt it produced.
+#[must_use]
+pub fn compaction_sides(session: &Session, compaction_id: &str) -> Option<CompactionSides> {
+    let leaf = session.default_leaf()?;
+    let path = session.branch(leaf);
+    let end = path.len().checked_sub(1)?;
+    let marks = Marks::scan(session, &path, end);
+    let position = path
+        .iter()
+        .position(|&index| session.entries[index].id == compaction_id)?;
+    let Kind::Compaction {
+        tokens_before,
+        summary_chars,
+        first_kept,
+        ..
+    } = &session.entries[path[position]].kind
+    else {
+        return None;
+    };
+    let before = if position == 0 {
+        Assembly::default()
+    } else {
+        assemble_at(session, &path, position - 1, &marks)
+    };
+    let after = assemble_at(session, &path, position, &marks);
+    let chars_of = |assembly: &Assembly| {
+        assembly
+            .components
+            .iter()
+            .map(|item| item.chars.total())
+            .sum::<u64>()
+    };
+    let ordered = |assembly: &Assembly| -> Vec<usize> { assembly.retained.clone() };
+    let (summary_tokens, _) = estimate(*summary_chars);
+    Some(CompactionSides {
+        id: compaction_id.to_string(),
+        at: session.entries[path[position]].at,
+        timestamp: session.entries[path[position]].timestamp.clone(),
+        tokens_before: *tokens_before,
+        before: ordered(&before),
+        after: after.retained.clone(),
+        before_tokens: before.total_tokens(),
+        after_tokens: after.total_tokens(),
+        before_chars: chars_of(&before),
+        after_chars: chars_of(&after),
+        summary_tokens,
+        first_kept: first_kept.clone(),
+        gap_turns: 0,
+    })
 }
 
 /// Walk every compaction on the branch in order and record what it left
@@ -504,6 +593,51 @@ mod tests {
         }
         let session = load(&path).expect("loads");
         (dir, session)
+    }
+
+    /// The retained list is a document, so the summary has to come first:
+    /// `build_session_context` writes the summary and then the tail, even
+    /// though the compaction entry sits at the end of the file.
+    #[test]
+    fn the_retained_list_puts_the_summary_first() {
+        let (_dir, session) = session_from(&[
+            r#"{"type":"session","id":"s","timestamp":"2026-01-01T00:00:00.000Z","cwd":"/tmp"}"#,
+            r#"{"type":"message","id":"u1","parentId":null,"timestamp":"2026-01-01T00:00:01.000Z","message":{"role":"user","content":"old"}}"#,
+            r#"{"type":"compaction","id":"c1","parentId":"u1","timestamp":"2026-01-01T00:00:02.000Z","summary":"the summary","tokensBefore":100,"firstKeptEntryId":"u2"}"#,
+            r#"{"type":"message","id":"u2","parentId":"c1","timestamp":"2026-01-01T00:00:03.000Z","message":{"role":"user","content":"kept"}}"#,
+        ]);
+        let assembly = assemble(&session, "u2");
+        let ids: Vec<&str> = assembly
+            .retained
+            .iter()
+            .map(|&index| session.entries[index].id.as_str())
+            .collect();
+        assert_eq!(ids, ["c1", "u2"]);
+    }
+
+    /// The two panes must bracket the compaction, not repeat the same side.
+    #[test]
+    fn compaction_sides_differ_before_and_after() {
+        // Long enough that dropping it is visible in the token totals.
+        let long = "x".repeat(4000);
+        let first = format!(
+            r#"{{"type":"message","id":"u1","parentId":null,"timestamp":"2026-01-01T00:00:01.000Z","message":{{"role":"user","content":"{long}"}}}}"#
+        );
+        let (_dir, session) = session_from(&[
+            r#"{"type":"session","id":"s","timestamp":"2026-01-01T00:00:00.000Z","cwd":"/tmp"}"#,
+            &first,
+            r#"{"type":"message","id":"a1","parentId":"u1","timestamp":"2026-01-01T00:00:02.000Z","message":{"role":"assistant","content":[{"type":"text","text":"answer"}]}}"#,
+            // The cut names an entry *before* the compaction: that is the
+            // retained tail the summary keeps, and the realistic shape.
+            r#"{"type":"compaction","id":"c1","parentId":"a1","timestamp":"2026-01-01T00:00:03.000Z","summary":"the summary","tokensBefore":100,"firstKeptEntryId":"a1"}"#,
+        ]);
+        let sides = compaction_sides(&session, "c1").expect("compaction");
+        let before: Vec<&str> = sides.before.iter().map(|&i| session.entries[i].id.as_str()).collect();
+        let after: Vec<&str> = sides.after.iter().map(|&i| session.entries[i].id.as_str()).collect();
+        assert_eq!(before, ["u1", "a1"], "before is everything that was in the prompt");
+        // Summary first even though a1 sits earlier in the file than c1.
+        assert_eq!(after, ["c1", "a1"], "after is summary + retained tail");
+        assert!(sides.before_tokens > sides.after_tokens, "the whole point of compacting");
     }
 
     /// A streamed call with no function name left garbage in `toolName`; it

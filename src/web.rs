@@ -1471,6 +1471,98 @@ pub fn prompt_text(
     })
 }
 
+/// One pane of the compaction viewer: the prompt either side of a compaction,
+/// entry by entry, in reading order.
+///
+/// Same contract as `prompt_text` — no per-block truncation, pages bounded by
+/// characters — because the point of opening this is to compare two documents,
+/// not to read two summaries of them.
+#[must_use]
+pub fn compaction_text(
+    session: &Session,
+    compaction_id: &str,
+    side: &str,
+    offset: usize,
+    limit: usize,
+    max_chars: usize,
+) -> Value {
+    let Some(sides) = crate::context::compaction_sides(session, compaction_id) else {
+        return json!({ "error": format!("no compaction {compaction_id:?} on this branch") });
+    };
+    let source = if side == "before" { &sides.before } else { &sides.after };
+    let total = source.len();
+    let start = offset.min(total);
+    let end = start.saturating_add(limit).min(total);
+    let mut rows = Vec::with_capacity(end - start);
+    let mut used = 0_u64;
+    let mut next: Option<usize> = None;
+
+    for (position, &index) in source[start..end].iter().enumerate() {
+        let entry = &session.entries[index];
+        let (blocks, note) = match crate::session::raw_line_at(&session.path, entry.offset) {
+            Ok(value) => (entry_blocks(&value), None),
+            Err(error) => (Vec::new(), Some(error)),
+        };
+        let chars: u64 = blocks
+            .iter()
+            .map(|block| block.text.chars().count() as u64)
+            .sum();
+        if !rows.is_empty() && used + chars > max_chars as u64 {
+            next = Some(start + position);
+            break;
+        }
+        used += chars;
+        let kept: Vec<Value> = blocks
+            .iter()
+            .map(|block| {
+                json!({
+                    "role": block.role,
+                    "text": block.text,
+                    "chars": block.text.chars().count() as u64,
+                })
+            })
+            .collect();
+        let (tokens, _) = crate::token_est::estimate(entry.chars());
+        rows.push(json!({
+            "id": entry.id,
+            "at": entry.at,
+            "timestamp": entry.timestamp,
+            "kind": entry.kind_name(),
+            "chars": entry.chars().total(),
+            "tokens": tokens,
+            "blocks": kept,
+            "error": note,
+        }));
+    }
+    if next.is_none() && start + rows.len() < total {
+        next = Some(start + rows.len());
+    }
+
+    json!({
+        "id": sides.id,
+        "at": sides.at,
+        "timestamp": sides.timestamp,
+        "tokensBefore": sides.tokens_before,
+        "summaryTokens": sides.summary_tokens,
+        "firstKept": sides.first_kept,
+        "before": {
+            "entries": sides.before.len(),
+            "tokens": sides.before_tokens,
+            "chars": sides.before_chars,
+        },
+        "after": {
+            "entries": sides.after.len(),
+            "tokens": sides.after_tokens,
+            "chars": sides.after_chars,
+        },
+        "side": side,
+        "offset": start,
+        "total": total,
+        "next": next,
+        "rows": rows,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
